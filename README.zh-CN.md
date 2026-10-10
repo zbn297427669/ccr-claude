@@ -47,7 +47,10 @@ ccr-claude                 # 多个 enabled Agent 时交互选序号
 ccr-claude --list-profiles
 ccr-claude --profile <id-或-名称片段>
 ccr-claude --model <名称>
+ccr-claude --skip-check    # 跳过网关 / token 预检
 ```
+
+启动前会检查 CCR 网关是否可达，以及所选 profile 的客户端密钥能否访问 `/v1/models`。上次选择的 profile 会记在 `~/.config/ccr-claude/last-profile`，下次优先使用。
 
 ## 配置（仓库内不含密钥）
 
@@ -56,8 +59,9 @@ ccr-claude --model <名称>
 | `CCR_DIR` | CCR 数据目录（含 `config.sqlite`） |
 | `CCR_BASE_URL` | 网关地址（未设置时从 CCR 配置读取） |
 | `CLAUDE_CONFIG_DIR` | 全局 Claude `settings.json` 所在目录 |
-| `CCR_PROFILE` / `--profile` | 指定 Agent |
-| `CCR_NO_PICK=1` | 不弹出选择菜单 |
+| `CCR_PROFILE` / `--profile` | 指定 Agent（名称片段匹配多个时会报错列出） |
+| `CCR_NO_PICK=1` | 不弹菜单；优先上次选择，否则最近修改 |
+| `CCR_SKIP_CHECK=1` | 跳过网关 / token 预检 |
 | `MODEL` / `--model` | 临时覆盖模型 |
 
 ### `CCR_DIR` 自动发现顺序

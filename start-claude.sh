@@ -13,10 +13,14 @@
 #   CCR_BASE_URL         网关地址，默认从配置读，再回退 http://127.0.0.1:3456
 #   CLAUDE_CONFIG_DIR    global-scope Claude settings 目录（含 settings.json）
 #   CCR_PROFILE          直接指定 profile id / 名称片段
-#   CCR_NO_PICK=1        多个 enabled 时不交互，用最近修改的
+#   CCR_NO_PICK=1        多个 enabled 时不交互（优先上次选择，否则最近修改）
+#   CCR_SKIP_CHECK=1     跳过网关 / token 预检
 #   MODEL                临时覆盖模型（支持 CCR 长名，会转成短名）
 #
 set -euo pipefail
+
+STATE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ccr-claude"
+LAST_PROFILE_FILE="${CCR_LAST_PROFILE_FILE:-$STATE_DIR/last-profile}"
 
 ccr_to_short_model() {
   local m="$1"
@@ -25,7 +29,6 @@ ccr_to_short_model() {
   printf '%s' "$m"
 }
 
-# 发现 CCR 数据目录（绝不写死用户名）
 discover_ccr_dir() {
   if [[ -n "${CCR_DIR:-}" && -f "${CCR_DIR}/config.sqlite" ]]; then
     printf '%s' "$CCR_DIR"
@@ -44,7 +47,6 @@ discover_ccr_dir() {
     fi
   done
 
-  # WSL：扫描 Windows 用户目录下的 Roaming 安装
   local d
   if [[ -d /mnt/c/Users ]]; then
     for d in /mnt/c/Users/*/AppData/Roaming/claude-code-router; do
@@ -58,7 +60,6 @@ discover_ccr_dir() {
   return 1
 }
 
-# 从 CCR_DIR 推导 Windows/本机 Claude 配置目录
 discover_claude_config_dir() {
   if [[ -n "${CLAUDE_CONFIG_DIR:-}" && -d "$CLAUDE_CONFIG_DIR" ]]; then
     printf '%s' "$CLAUDE_CONFIG_DIR"
@@ -70,7 +71,6 @@ discover_claude_config_dir() {
   fi
 
   local ccr="$1"
-  # .../Users/<name>/AppData/Roaming/claude-code-router → .../Users/<name>/.claude
   if [[ "$ccr" =~ ^(.*/Users/[^/]+)/AppData/Roaming/claude-code-router$ ]]; then
     if [[ -d "${BASH_REMATCH[1]}/.claude" ]]; then
       printf '%s' "${BASH_REMATCH[1]}/.claude"
@@ -83,11 +83,9 @@ discover_claude_config_dir() {
     return 0
   fi
 
-  # 允许不存在：global scope 时再报错
   printf '%s' "$HOME/.claude"
 }
 
-# 从 config.sqlite 读网关 URL；失败则默认本地
 discover_base_url() {
   if [[ -n "${CCR_BASE_URL:-}" ]]; then
     printf '%s' "$CCR_BASE_URL"
@@ -136,16 +134,14 @@ PY
   fi
 }
 
-# 用法: ccr_query all|active|model <id>|token <id>
-ccr_query() {
-  python3 - "$CCR_DIR" "$CLAUDE_CONFIG_DIR" "$@" <<'PY'
+# 一次读出全部 Claude Code profiles（JSON 数组），供后续逻辑复用
+load_profiles_json() {
+  python3 - "$CCR_DIR" "$CLAUDE_CONFIG_DIR" <<'PY'
 import json, re, shutil, sqlite3, sys, tempfile
 from pathlib import Path
 
 ccr = Path(sys.argv[1])
 claude_home = Path(sys.argv[2])
-mode = sys.argv[3]
-arg = sys.argv[4] if len(sys.argv) > 4 else ""
 
 def short(m: str) -> str:
     m = (m or "").strip()
@@ -161,23 +157,16 @@ def open_db():
     con = sqlite3.connect(f"file:{td / 'config.sqlite'}?mode=ro", uri=True)
     return con, td
 
-def load_profiles(con):
-    row = con.execute("select value_json from app_config where key='default'").fetchone()
-    if not row:
-        return []
-    cfg = json.loads(row[0])
-    return [
-        p for p in (cfg.get("profile", {}).get("profiles") or [])
-        if p.get("agent") == "claude-code"
-    ]
-
 def token_for(con, pid: str) -> str:
     row = con.execute(
         "select encrypted_key, encryption from api_keys where id=?",
         (f"profile:{pid}",),
     ).fetchone()
-    if row and row[0] and (row[1] or "plain") == "plain":
-        return row[0].strip()
+    if row and row[0]:
+        enc = (row[1] or "plain").lower()
+        if enc == "plain":
+            return row[0].strip()
+        return ""  # encrypted: cannot use from this script
     for name in (
         f"ccr-claude-code-api-key-{pid}.cmd",
         f"ccr-claude-code-api-key-{pid}.sh",
@@ -239,101 +228,219 @@ def mtime_for(pid: str, scope: str) -> float:
             pass
     return best
 
-def enrich(con, p):
-    pid = p.get("id") or ""
-    scope = p.get("scope") or "global"
-    model = (p.get("model") or p.get("sonnetModel") or "").strip()
-    if not model:
-        model = settings_model(pid, scope)
-    return {
-        "id": pid,
-        "name": p.get("name") or pid,
-        "model": model,
-        "short": short(model),
-        "enabled": bool(p.get("enabled", True)),
-        "scope": scope,
-        "mtime": mtime_for(pid, scope),
-        "token": token_for(con, pid),
-    }
-
 con, td = open_db()
 try:
-    profiles = [enrich(con, p) for p in load_profiles(con)]
-
-    if mode == "all":
-        for p in sorted(profiles, key=lambda x: x["id"]):
-            print(
-                f"{p['id']}\t{p['name']}\t{p['scope']}\t{p['model']}\t{int(p['enabled'])}"
-            )
-    elif mode == "active":
-        cands = [p for p in profiles if p["enabled"] and p["model"] and p["token"]]
-        if not cands:
-            sys.exit(1)
-        cands.sort(key=lambda x: x["mtime"], reverse=True)
-        for p in cands:
-            print(f"{p['id']}\t{p['name']}\t{p['short']}")
-    elif mode == "model":
-        for p in profiles:
-            if p["id"] == arg and p["model"]:
-                print(p["model"])
-                sys.exit(0)
-        sys.exit(1)
-    elif mode == "token":
-        for p in profiles:
-            if p["id"] == arg and p["token"]:
-                print(p["token"])
-                sys.exit(0)
-        tok = token_for(con, arg)
-        if tok:
-            print(tok)
-            sys.exit(0)
-        sys.exit(1)
-    else:
-        sys.exit(2)
+    row = con.execute("select value_json from app_config where key='default'").fetchone()
+    cfg = json.loads(row[0]) if row else {}
+    out = []
+    for p in cfg.get("profile", {}).get("profiles") or []:
+        if p.get("agent") != "claude-code":
+            continue
+        pid = p.get("id") or ""
+        scope = p.get("scope") or "global"
+        model = (p.get("model") or p.get("sonnetModel") or "").strip()
+        if not model:
+            model = settings_model(pid, scope)
+        token = token_for(con, pid)
+        out.append(
+            {
+                "id": pid,
+                "name": p.get("name") or pid,
+                "model": model,
+                "short": short(model),
+                "enabled": bool(p.get("enabled", True)),
+                "scope": scope,
+                "mtime": mtime_for(pid, scope),
+                "has_token": bool(token),
+            }
+        )
+    json.dump(out, sys.stdout, ensure_ascii=False)
 finally:
     con.close()
     shutil.rmtree(td, ignore_errors=True)
 PY
 }
 
-list_ccr_profiles() { ccr_query all; }
-list_active_profiles() { ccr_query active; }
-read_profile_token() { ccr_query token "$1"; }
-read_profile_model() { ccr_query model "$1"; }
+# 对缓存的 profiles JSON 文件查询（不再反复读 sqlite）
+profiles_query() {
+  python3 - "$PROFILES_JSON_FILE" "$@" <<'PY'
+import json, sys
+from pathlib import Path
+
+profiles = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+mode = sys.argv[2]
+arg = sys.argv[3] if len(sys.argv) > 3 else ""
+last = sys.argv[4] if len(sys.argv) > 4 else ""
+
+def active():
+    cands = [
+        p
+        for p in profiles
+        if p.get("enabled") and p.get("model") and p.get("has_token")
+    ]
+    cands.sort(key=lambda p: p.get("mtime") or 0, reverse=True)
+    if last:
+        preferred = [p for p in cands if p.get("id") == last]
+        others = [p for p in cands if p.get("id") != last]
+        if preferred:
+            return preferred + others
+    return cands
+
+if mode == "all":
+    for p in sorted(profiles, key=lambda x: x.get("id") or ""):
+        print(
+            "\t".join(
+                [
+                    p.get("id") or "",
+                    p.get("name") or "",
+                    p.get("scope") or "",
+                    p.get("model") or "",
+                    str(int(bool(p.get("enabled")))),
+                    str(int(bool(p.get("has_token")))),
+                ]
+            )
+        )
+elif mode == "active":
+    cands = active()
+    if not cands:
+        sys.exit(1)
+    for p in cands:
+        print(f"{p.get('id') or ''}\t{p.get('name') or ''}\t{p.get('short') or ''}")
+elif mode == "resolve":
+    want = arg
+    matches = []
+    for p in profiles:
+        pid, name = p.get("id") or "", p.get("name") or ""
+        if want == pid or want == name or want in pid or want in name:
+            matches.append(p)
+    exact = [
+        p
+        for p in matches
+        if want == (p.get("id") or "") or want == (p.get("name") or "")
+    ]
+    use = exact or matches
+    if len(use) == 0:
+        sys.exit(1)
+    if len(use) > 1:
+        for p in use:
+            print(f"{p.get('id') or ''}\t{p.get('name') or ''}", file=sys.stderr)
+        sys.exit(2)
+    print(use[0]["id"])
+elif mode == "field":
+    pid, field = arg.split("\t", 1) if "\t" in arg else (arg, "model")
+    for p in profiles:
+        if p.get("id") == pid:
+            val = p.get(field) or ""
+            if field == "model" and not val:
+                val = ""
+            if val:
+                print(val)
+                sys.exit(0)
+            sys.exit(1)
+    sys.exit(1)
+else:
+    sys.exit(2)
+PY
+}
+
+# 仅在选定 profile 后读一次密钥（不把 token 放进缓存 JSON / argv）
+read_profile_token() {
+  python3 - "$CCR_DIR" "$1" <<'PY'
+import re, shutil, sqlite3, sys, tempfile
+from pathlib import Path
+
+ccr = Path(sys.argv[1])
+pid = sys.argv[2]
+td = Path(tempfile.mkdtemp(prefix="ccr-tok-"))
+try:
+    for n in ("config.sqlite", "config.sqlite-wal", "config.sqlite-shm"):
+        p = ccr / n
+        if p.exists():
+            shutil.copy2(p, td / n)
+    con = sqlite3.connect(f"file:{td / 'config.sqlite'}?mode=ro", uri=True)
+    row = con.execute(
+        "select encrypted_key, encryption from api_keys where id=?",
+        (f"profile:{pid}",),
+    ).fetchone()
+    if row and row[0] and (row[1] or "plain").lower() == "plain":
+        print(row[0].strip())
+        raise SystemExit(0)
+    for name in (
+        f"ccr-claude-code-api-key-{pid}.cmd",
+        f"ccr-claude-code-api-key-{pid}.sh",
+    ):
+        f = ccr / "bin" / name
+        if not f.is_file():
+            continue
+        m = re.search(
+            r"ccr-profile-[A-Za-z0-9_-]+",
+            f.read_text(encoding="utf-8", errors="ignore"),
+        )
+        if m:
+            print(m.group(0))
+            raise SystemExit(0)
+    raise SystemExit(1)
+finally:
+    shutil.rmtree(td, ignore_errors=True)
+PY
+}
+
+read_last_profile() {
+  [[ -f "$LAST_PROFILE_FILE" ]] || return 1
+  local id
+  id="$(tr -d '[:space:]' <"$LAST_PROFILE_FILE" || true)"
+  [[ -n "$id" ]] || return 1
+  printf '%s' "$id"
+}
+
+save_last_profile() {
+  local id="$1"
+  mkdir -p "$STATE_DIR" 2>/dev/null || return 0
+  printf '%s\n' "$id" >"$LAST_PROFILE_FILE" 2>/dev/null || true
+}
 
 resolve_profile_id() {
-  local want="$1" id name scope model enabled
-  while IFS=$'\t' read -r id name scope model enabled; do
-    [[ -z "$id" ]] && continue
-    if [[ "$want" == "$id" || "$want" == "$name" ]]; then
-      printf '%s' "$id"
-      return 0
-    fi
-    if [[ "$id" == *"$want"* || "$name" == *"$want"* ]]; then
-      printf '%s' "$id"
-      return 0
-    fi
-  done < <(list_ccr_profiles)
+  local want="$1" out rc
+  set +e
+  out="$(profiles_query resolve "$want" 2>/tmp/ccr-claude-resolve.err)"
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 && -n "$out" ]]; then
+    printf '%s' "$out"
+    return 0
+  fi
+  if [[ $rc -eq 2 ]]; then
+    echo "Profile \"$want\" is ambiguous; matches:" >&2
+    sed 's/^/  /' /tmp/ccr-claude-resolve.err >&2 || true
+    echo "Use a more specific --profile id/name." >&2
+    return 2
+  fi
   return 1
 }
 
 pick_profile() {
   local force_pick="${1:-0}"
   local -a ids names models
-  local id name model i choice
+  local id name model i choice last default_idx=1 mark
+
+  last="$(read_last_profile || true)"
 
   while IFS=$'\t' read -r id name model; do
     [[ -z "$id" ]] && continue
     ids+=("$id")
     names+=("$name")
     models+=("$model")
-  done < <(list_active_profiles)
+  done < <(profiles_query active "" "$last")
 
   [[ ${#ids[@]} -gt 0 ]] || return 1
+
   if [[ ${#ids[@]} -eq 1 ]]; then
     printf '%s' "${ids[0]}"
     return 0
   fi
+
+  # 默认序号：上次用过的排在第 1（active 已重排），保持 1
+  default_idx=1
 
   if [[ "$force_pick" != "1" ]]; then
     if [[ ! -t 0 || "${CCR_NO_PICK:-0}" == "1" ]]; then
@@ -351,7 +458,11 @@ pick_profile() {
   {
     echo "Multiple enabled CCR Claude Code agents — pick one:"
     for i in "${!ids[@]}"; do
-      printf "  %d) %s  [%s]  (%s)\n" "$((i + 1))" "${names[i]}" "${models[i]}" "${ids[i]}"
+      mark=""
+      if [[ -n "$last" && "${ids[i]}" == "$last" ]]; then
+        mark="  (last)"
+      fi
+      printf "  %d) %s  [%s]  (%s)%s\n" "$((i + 1))" "${names[i]}" "${models[i]}" "${ids[i]}" "$mark"
     done
     echo "  0) cancel"
   } >&2
@@ -359,11 +470,11 @@ pick_profile() {
   while true; do
     choice=""
     if [[ -t 0 ]]; then
-      read -r -p "Number [1]: " choice || choice=""
+      read -r -p "Number [${default_idx}]: " choice || choice=""
     else
       read -r choice || choice=""
     fi
-    choice="${choice:-1}"
+    choice="${choice:-$default_idx}"
     if [[ "$choice" == "0" ]]; then
       echo "Cancelled." >&2
       exit 130
@@ -376,12 +487,52 @@ pick_profile() {
   done
 }
 
+# 网关可达 + 当前 profile token 可用
+preflight_check() {
+  local base="$1" token="$2" profile="$3"
+  local code body
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "warning: curl not found; skipping gateway preflight." >&2
+    return 0
+  fi
+
+  if ! curl -fsS -m 3 "$base/" >/dev/null 2>&1 && \
+     ! curl -fsS -m 3 "$base/health" >/dev/null 2>&1; then
+    echo "CCR gateway unreachable: $base" >&2
+    echo "Start CCR Desktop / gateway, or set CCR_BASE_URL." >&2
+    return 1
+  fi
+
+  body="$(mktemp)"
+  code="$(curl -sS -m 8 -o "$body" -w '%{http_code}' \
+    -H "Authorization: Bearer ${token}" \
+    "$base/v1/models" 2>/dev/null || echo "000")"
+
+  if [[ "$code" == "200" ]]; then
+    rm -f "$body"
+    return 0
+  fi
+
+  echo "CCR auth/preflight failed for profile \"$profile\" (HTTP $code)." >&2
+  if [[ "$code" == "401" || "$code" == "403" ]]; then
+    echo "Client key looks invalid or not allowed. Re-save/enable the agent in CCR Desktop, then retry." >&2
+  elif [[ "$code" == "000" ]]; then
+    echo "Could not complete request to $base/v1/models." >&2
+  else
+    head -c 300 "$body" >&2 || true
+    echo >&2
+  fi
+  rm -f "$body"
+  return 1
+}
+
 usage() {
   cat <<'EOF'
 Usage:
   ccr-claude                      # interactive pick when multiple agents enabled
   ccr-claude --pick               # force menu
-  ccr-claude --profile <id|name>  # select by id / name substring
+  ccr-claude --profile <id|name>  # select by id / name substring (errors if ambiguous)
   ccr-claude --list-profiles
   ccr-claude --model <short-or-long-name>
   MODEL=<name> ccr-claude
@@ -391,11 +542,12 @@ Environment:
   CCR_BASE_URL        Gateway URL (else read from CCR config)
   CLAUDE_CONFIG_DIR   Global Claude settings dir (else derived / ~/.claude)
   CCR_PROFILE         Same as --profile
-  CCR_NO_PICK=1       Never prompt; use most recently modified agent
+  CCR_NO_PICK=1       Never prompt; prefer last used, else most recently modified
+  CCR_SKIP_CHECK=1    Skip gateway / token preflight
   MODEL               Temporary model override
 
-Secrets are never stored in this script. Profile tokens are read at runtime from
-CCR's local api_keys table or bin/ccr-claude-code-api-key-*.cmd helpers.
+Last selected profile is stored in:
+  ${XDG_CONFIG_HOME:-~/.config}/ccr-claude/last-profile
 EOF
 }
 
@@ -409,27 +561,42 @@ CCR_DIR="$(discover_ccr_dir)" || {
 CLAUDE_CONFIG_DIR="$(discover_claude_config_dir "$CCR_DIR")"
 CCR_BASE_URL="$(discover_base_url "$CCR_DIR")"
 
+PROFILES_JSON_FILE="$(mktemp "${TMPDIR:-/tmp}/ccr-claude-profiles.XXXXXX")"
+cleanup_profiles_cache() { rm -f "$PROFILES_JSON_FILE"; }
+trap cleanup_profiles_cache EXIT
+
+load_profiles_json >"$PROFILES_JSON_FILE" || {
+  echo "Failed to read CCR profiles from: $CCR_DIR" >&2
+  exit 1
+}
+
 PROFILE_WANT="${CCR_PROFILE:-}"
 RAW_MODEL="${MODEL:-}"
 MODEL_SOURCE=""
 FORCE_PICK=0
+SKIP_CHECK="${CCR_SKIP_CHECK:-0}"
 PASS_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
     --list-profiles)
-      printf '%s\n' "ID	NAME	ENABLED	MODEL"
-      while IFS=$'\t' read -r id name scope model enabled; do
+      printf '%s\n' "ID	NAME	ENABLED	TOKEN	MODEL"
+      while IFS=$'\t' read -r id name scope model enabled has_token; do
         short="$(ccr_to_short_model "$model")"
         en="no"; [[ "$enabled" == "1" ]] && en="yes"
-        printf '%s\t%s\t%s\t%s\n' "$id" "$name" "$en" "${short:-"(none)"}"
-      done < <(list_ccr_profiles)
+        tok="no"; [[ "$has_token" == "1" ]] && tok="yes"
+        printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$en" "$tok" "${short:-"(none)"}"
+      done < <(profiles_query all)
       echo "CCR_DIR=$CCR_DIR" >&2
       echo "CCR_BASE_URL=$CCR_BASE_URL" >&2
+      if last="$(read_last_profile || true)"; [[ -n "${last:-}" ]]; then
+        echo "LAST_PROFILE=$last" >&2
+      fi
       exit 0
       ;;
     --pick) FORCE_PICK=1; shift ;;
+    --skip-check) SKIP_CHECK=1; shift ;;
     --profile)
       PROFILE_WANT="${2:-}"
       [[ -n "$PROFILE_WANT" ]] || { echo "missing --profile value" >&2; exit 1; }
@@ -454,11 +621,18 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -n "$PROFILE_WANT" ]]; then
-  PROFILE_ID="$(resolve_profile_id "$PROFILE_WANT")" || {
-    echo "CCR profile not found: $PROFILE_WANT" >&2
-    list_ccr_profiles | awk -F'\t' '{print "  "$1"  "$2}' >&2
+  set +e
+  PROFILE_ID="$(resolve_profile_id "$PROFILE_WANT")"
+  resolve_rc=$?
+  set -e
+  if [[ $resolve_rc -eq 2 ]]; then
     exit 1
-  }
+  fi
+  if [[ $resolve_rc -ne 0 || -z "${PROFILE_ID:-}" ]]; then
+    echo "CCR profile not found: $PROFILE_WANT" >&2
+    profiles_query all | awk -F'\t' '{print "  "$1"  "$2}' >&2
+    exit 1
+  fi
 else
   PROFILE_ID="$(pick_profile "$FORCE_PICK")" || {
     echo "No enabled Claude Code profile with model + token in CCR." >&2
@@ -473,7 +647,7 @@ TOKEN="$(read_profile_token "$PROFILE_ID")" || {
   exit 1
 }
 
-PROFILE_MODEL="$(read_profile_model "$PROFILE_ID" || true)"
+PROFILE_MODEL="$(profiles_query field "${PROFILE_ID}"$'\t'"model" || true)"
 
 if [[ -n "${MODEL:-}" && -z "$MODEL_SOURCE" ]]; then
   RAW_MODEL="$MODEL"
@@ -498,6 +672,10 @@ if ! command -v claude >/dev/null 2>&1; then
   exit 1
 fi
 
+if [[ "$SKIP_CHECK" != "1" ]]; then
+  preflight_check "$CCR_BASE_URL" "$TOKEN" "$PROFILE_ID" || exit 1
+fi
+
 export ANTHROPIC_BASE_URL="$CCR_BASE_URL"
 export ANTHROPIC_AUTH_TOKEN="$TOKEN"
 unset ANTHROPIC_API_KEY
@@ -509,6 +687,8 @@ export ANTHROPIC_DEFAULT_HAIKU_MODEL="$DEFAULT_MODEL"
 
 export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
 export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1
+
+save_last_profile "$PROFILE_ID"
 
 {
   echo "CCR profile: $PROFILE_ID"

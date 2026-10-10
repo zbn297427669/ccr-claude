@@ -47,7 +47,10 @@ ccr-claude                 # pick among enabled agents if more than one
 ccr-claude --list-profiles
 ccr-claude --profile <id-or-name-substring>
 ccr-claude --model <name>
+ccr-claude --skip-check    # skip gateway / token preflight
 ```
+
+Before starting Claude Code, the script checks that the CCR gateway is reachable and that the selected profile’s client key can call `/v1/models`. The last chosen profile is remembered under `~/.config/ccr-claude/last-profile` and preferred next time.
 
 ## Configuration (no secrets in the repo)
 
@@ -56,8 +59,9 @@ ccr-claude --model <name>
 | `CCR_DIR` | CCR data dir containing `config.sqlite` |
 | `CCR_BASE_URL` | Gateway URL (else read from CCR config) |
 | `CLAUDE_CONFIG_DIR` | Global Claude `settings.json` dir |
-| `CCR_PROFILE` / `--profile` | Select agent |
-| `CCR_NO_PICK=1` | Skip interactive menu |
+| `CCR_PROFILE` / `--profile` | Select agent (errors if the substring matches more than one) |
+| `CCR_NO_PICK=1` | Skip interactive menu; prefer last used, else newest |
+| `CCR_SKIP_CHECK=1` | Skip gateway / token preflight |
 | `MODEL` / `--model` | Temporary model override |
 
 ### Auto-discovery order for `CCR_DIR`
