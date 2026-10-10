@@ -8,6 +8,29 @@
 
 CCR 桌面端会把各 Agent 的客户端密钥、模型等写在本机（常见是 Windows）。本脚本在运行时自动发现这些数据，让 WSL / Linux 能直接启动 `claude`，而无需在脚本里写死密钥或用户路径。
 
+## 应用场景
+
+适合：**已经在用 CCR 做本地网关**，又希望在 Unix shell 里用 **Claude Code CLI** 复用同一套 Agent。
+
+| 场景 | 能解决什么 |
+| --- | --- |
+| **Windows 跑 CCR，WSL 里用 Claude Code** | CCR 桌面端在 Windows 监听网关（如 `localhost:3456`）；你在 WSL 项目目录工作，用 `ccr-claude` 启动，而不用每次手动 `export` 一堆环境变量。 |
+| **多个 CCR Agent / 多家上游** | 例如一个 Agent 走国内模型，另一个走 DeepSeek。脚本会列出 CCR 里 **已启用** 的 Claude Code Agent，用序号选择，或用 `--profile` 指定。 |
+| **启动器可开源，凭证留在本机** | 仓库不包含密钥和本机用户名；每台机器运行时读取自己的 CCR `config.sqlite` / profile 辅助脚本。 |
+| **任意项目目录启动** | 安装到 `PATH` 后，`cd` 进任意仓库再运行 `ccr-claude`，当前目录即为 Claude Code 的项目根目录。 |
+
+### 运行前提
+
+- CCR 网关已启动且可访问（默认 `http://127.0.0.1:3456`）
+- CCR 中至少有一个 **已启用** 的 Claude Code Agent，并具备有效的客户端密钥与模型
+- Linux / WSL 侧已安装官方 `claude` CLI
+
+### 不在范围内
+
+- 替代 CCR 桌面端做供应商 / Agent 配置
+- **不经过 CCR** 直连 Anthropic 或其他上游
+- 在 WSL 内直接使用 Windows 专用的 `ccr-app "…"`（本脚本是对应的 Linux/WSL 启动方式）
+
 ## 安装
 
 ```bash

@@ -8,6 +8,29 @@ Launch [Claude Code](https://code.claude.com/) on Linux/WSL through a local [Cla
 
 CCR Desktop writes profile tokens and model settings on the machine where it runs (often Windows). This script discovers that data at runtime so WSL/Linux can start `claude` without hardcoding secrets or usernames.
 
+## Use cases
+
+This project is for people who already run **CCR as a local gateway** and want **Claude Code CLI** to use those same agents from a Unix shell.
+
+| Scenario | What you get |
+| --- | --- |
+| **Windows CCR + WSL Claude Code** | CCR Desktop runs on Windows (`localhost:3456`); you work in WSL projects and launch Claude Code with `ccr-claude` instead of hand-exporting env vars. |
+| **Several CCR agents (multi-provider)** | e.g. one agent for a domestic provider, another for DeepSeek. The script lists **enabled** Claude Code agents and lets you pick by number, or pin one with `--profile`. |
+| **Shareable launcher, private credentials** | The repo stays free of tokens and usernames. Each machine reads its own CCR `config.sqlite` / profile helpers at runtime. |
+| **Any project directory** | Install once on `PATH`, then `cd` into a repo and run `ccr-claude` — the project root is your current working directory. |
+
+### Requirements (runtime)
+
+- CCR gateway is running and reachable (default `http://127.0.0.1:3456`)
+- At least one **Claude Code** agent is enabled in CCR, with a valid client key and model
+- Official `claude` CLI installed on the Linux/WSL side
+
+### Not in scope
+
+- Replacing CCR Desktop configuration or provider setup
+- Talking to Anthropic (or other providers) **without** CCR
+- Running the Windows-only `ccr-app "…"` launcher inside WSL (this script is the WSL/Linux counterpart)
+
 ## Install
 
 ```bash
