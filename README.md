@@ -91,4 +91,4 @@ Long CCR model ids like `Provider/model[1m]` are normalized to the upstream shor
 
 ## License
 
-Use and modify freely for your own projects; no warranty.
+[MIT](./LICENSE)

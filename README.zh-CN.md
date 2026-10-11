@@ -91,4 +91,4 @@ CCR 长模型名（如 `Provider/model[1m]`）会规范成上游短名（`model`
 
 ## 许可
 
-可自由使用与修改；不做任何担保。
+[MIT](./LICENSE)
