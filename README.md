@@ -52,6 +52,8 @@ ccr-claude --skip-check    # skip gateway / token preflight
 
 Before starting Claude Code, the script checks that the CCR gateway is reachable and that the selected profile’s client key can call `/v1/models`. The last chosen profile is remembered under `~/.config/ccr-claude/last-profile` and preferred next time.
 
+The script also resolves the model’s real context window and passes it to Claude Code (`CLAUDE_CODE_MAX_CONTEXT_TOKENS`), printing `Context window: <N> tokens` at startup. If nothing can be resolved it sets nothing rather than guessing. For why this is needed and what is missing between CCR and Claude Code, see [CONTEXT-WINDOW.md](./CONTEXT-WINDOW.md).
+
 ## Configuration (no secrets in the repo)
 
 | Variable | Purpose |
@@ -62,6 +64,7 @@ Before starting Claude Code, the script checks that the CCR gateway is reachable
 | `CCR_PROFILE` / `--profile` | Select agent (errors if the substring matches more than one) |
 | `CCR_NO_PICK=1` | Skip interactive menu; prefer last used, else newest |
 | `CCR_SKIP_CHECK=1` | Skip gateway / token preflight |
+| `CCR_CONTEXT_WINDOW` | Override the resolved context window (token count); `off` disables resolution |
 | `MODEL` / `--model` | Temporary model override |
 
 ### Auto-discovery order for `CCR_DIR`

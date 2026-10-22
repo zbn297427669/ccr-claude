@@ -52,6 +52,8 @@ ccr-claude --skip-check    # 跳过网关 / token 预检
 
 启动前会检查 CCR 网关是否可达，以及所选 profile 的客户端密钥能否访问 `/v1/models`。上次选择的 profile 会记在 `~/.config/ccr-claude/last-profile`，下次优先使用。
 
+脚本还会解析当前模型的真实上下文窗口并传给 Claude Code（`CLAUDE_CODE_MAX_CONTEXT_TOKENS`），启动时打印一行 `Context window: <N> tokens`。解析不到就不设，而不是猜一个值。为什么要这么做、CCR 和 Claude Code 之间缺了什么，见 [CONTEXT-WINDOW.md](./CONTEXT-WINDOW.md)。
+
 ## 配置（仓库内不含密钥）
 
 | 变量 | 作用 |
@@ -62,6 +64,7 @@ ccr-claude --skip-check    # 跳过网关 / token 预检
 | `CCR_PROFILE` / `--profile` | 指定 Agent（名称片段匹配多个时会报错列出） |
 | `CCR_NO_PICK=1` | 不弹菜单；优先上次选择，否则最近修改 |
 | `CCR_SKIP_CHECK=1` | 跳过网关 / token 预检 |
+| `CCR_CONTEXT_WINDOW` | 覆盖自动解析到的窗口值（token 数）；`off` 关闭自动解析 |
 | `MODEL` / `--model` | 临时覆盖模型 |
 
 ### `CCR_DIR` 自动发现顺序

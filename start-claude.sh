@@ -399,6 +399,213 @@ save_last_profile() {
   printf '%s\n' "$id" >"$LAST_PROFILE_FILE" 2>/dev/null || true
 }
 
+# CCR Desktop writes environment variables into the selected profile's
+# Windows wrapper (.cmd), but a Claude process launched inside WSL cannot
+# inherit them. Import only path-independent, non-secret keys; an existing
+# WSL value always wins.
+import_ccr_wrapper_env() {
+  local pid="$1" wrapper line key value
+  wrapper="$CCR_DIR/bin/ccr-claude-code-wrapper-${pid}.cmd"
+  [[ -f "$wrapper" ]] || return 0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^[[:space:]]*set[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+    key="${BASH_REMATCH[1]}"
+    value="${BASH_REMATCH[2]%$'\r'}"
+    case "$key" in
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS|\
+      CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT|\
+      CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY)
+        ;;
+      *) continue ;;
+    esac
+    [[ -n "$value" ]] || continue
+    if [[ ! -v "$key" ]]; then
+      printf -v "$key" '%s' "$value"
+      export "$key"
+    fi
+  done <"$wrapper"
+}
+
+# Ask the model how big its context is, instead of asking the user.
+#
+# Why this exists: Claude Code and CCR have no channel for this value. CCR knows
+# a model's window (it probes /v1/models and stores contextWindow), and its
+# gateway even advertises the model to Claude Code -- but the gateway's model
+# list carries no window field, and Claude Code's gateway cache schema
+# ({id, display_name, icon_url, ...}) has nowhere to put one. Claude Code
+# therefore assumes 200000 for anything it does not recognise, and the
+# "Detected automatically" placeholder in CCR's model panel is a placeholder,
+# not a reading. The value that actually decides where compaction fires is
+# CLAUDE_CODE_MAX_CONTEXT_TOKENS (it clamps modelSettings.*.autoCompactWindow,
+# verified), so this sets that one.
+#
+# Sources, best first:
+#   1. the provider's own /v1/models, when it is a loopback endpoint we can reach
+#   2. the provider's stored modelMetadata.contextWindow (CCR's last probe)
+#   3. CCR's per-install model catalog (~/.codex/ccr-model-catalog.json)
+# Nothing found: stay silent and set nothing. Leaving it unset is better than
+# guessing -- a wrong value is a silent compaction at the wrong point.
+#
+# Override with CCR_CONTEXT_WINDOW=<tokens>, or disable with
+# CCR_CONTEXT_WINDOW=off.
+resolve_context_window() {
+  local model="$1"
+  [[ "${CCR_CONTEXT_WINDOW:-}" == "off" ]] && return 0
+  if [[ "${CCR_CONTEXT_WINDOW:-}" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$CCR_CONTEXT_WINDOW"
+    return 0
+  fi
+
+  python3 - "$CCR_DIR" "$model" <<'PY' 2>/dev/null || true
+import json, re, shutil, sqlite3, sys, tempfile, urllib.request
+from pathlib import Path
+
+ccr = Path(sys.argv[1])
+model = (sys.argv[2] or "").strip()
+if not model:
+    sys.exit(0)
+
+provider_name, _, model_part = model.partition("/")
+if not model_part:
+    provider_name, model_part = "", model
+
+
+def open_db():
+    td = Path(tempfile.mkdtemp(prefix="ccr-ctx-"))
+    for n in ("config.sqlite", "config.sqlite-wal", "config.sqlite-shm"):
+        p = ccr / n
+        if p.exists():
+            shutil.copy2(p, td / n)
+    return sqlite3.connect(f"file:{td / 'config.sqlite'}?mode=ro", uri=True), td
+
+
+def to_int(v):
+    try:
+        n = int(float(v))
+    except (TypeError, ValueError):
+        return None
+    return n if 0 < n <= 10_000_000 else None
+
+
+ctx = None
+base = ""
+api_key = ""
+
+try:
+    con, td = open_db()
+except Exception:
+    con, td = None, None
+
+meta_names = {}   # every name the provider's metadata knows this model by
+try:
+    if con is not None:
+        row = con.execute(
+            "select value_json from app_config where key='default'"
+        ).fetchone()
+        cfg = json.loads(row[0]) if row else {}
+        for p in cfg.get("Providers") or []:
+            names = {p.get("name"), p.get("id")} - {None, ""}
+            if provider_name not in names:
+                continue
+            base = (p.get("api_base_url") or p.get("baseUrl") or "").rstrip("/")
+            api_key = p.get("api_key") or ""
+            meta = p.get("modelMetadata") or {}
+            meta_names = {"__all__": list(meta.keys())}
+            for key in (model_part, model):
+                m = meta.get(key) or {}
+                ctx = to_int(m.get("contextWindow") or m.get("context_window"))
+                if ctx:
+                    break
+            break
+finally:
+    if con is not None:
+        try:
+            con.close()
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+
+def probe(url, key, wanted):
+    req = urllib.request.Request(url)
+    if key:
+        req.add_header("authorization", "Bearer " + key)
+        req.add_header("x-api-key", key)
+    with urllib.request.urlopen(req, timeout=1.5) as r:
+        data = json.loads(r.read().decode("utf-8", "replace"))
+    entries = data.get("data") or data.get("models") or []
+    # Exact match first. A local endpoint often serves one model under the id
+    # it was built with, which need not be the name CCR or the profile uses
+    # (here: CCR says bonsai-v3, the artifact answers as bonsai-heretic). A
+    # single-model endpoint is unambiguous, so accept it -- but only when the
+    # profile names that same provider, or a cloud model would inherit the
+    # local window.
+    for m in entries:
+        ids = {m.get("id"), (m.get("id") or "").split("/")[-1]}
+        if wanted & ids:
+            for f in ("context_window", "contextWindow", "max_context_window",
+                      "max_model_len"):
+                v = to_int(m.get(f))
+                if v:
+                    return v
+    if len(entries) == 1:
+        m = entries[0]
+        for f in ("context_window", "contextWindow", "max_context_window",
+                  "max_model_len"):
+            v = to_int(m.get(f))
+            if v:
+                return v
+    return None
+
+
+# The endpoint answers for its provider, so match against both the model name
+# CCR uses and the names its metadata lists for the same provider.
+wanted = {model_part, model}
+wanted |= set((meta_names or {}).get("__all__", []))
+
+# 1. the endpoint itself, when it is on this machine
+if ctx is None and re.match(r"^https?://(127\.|localhost|\[::1\])", base):
+    for suffix in ("/models", "/v1/models"):
+        try:
+            ctx = probe(base + suffix, api_key, wanted)
+        except Exception:
+            ctx = None
+        if ctx:
+            break
+
+# 3. CCR's per-install catalog. It lives beside .codex under the Windows user
+#    profile when CCR runs on Windows and this script runs in WSL.
+if ctx is None:
+    cats = [Path.home() / ".codex" / "ccr-model-catalog.json", ccr / "models.json"]
+    if re.match(r"^/mnt/[a-z]/", str(ccr)):
+        # .../AppData/Roaming/claude-code-router -> .../.codex/ccr-model-catalog.json
+        cats.insert(0, ccr.parents[2] / ".codex" / "ccr-model-catalog.json")
+    for cat in cats:
+        if not cat.is_file():
+            continue
+        try:
+            data = json.loads(cat.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for m in data.get("models") or []:
+            ids = {m.get("id"), m.get("slug"), m.get("model")}
+            if wanted & ids:
+                for f in ("context_window", "contextWindow",
+                          "max_context_window", "max_model_len"):
+                    v = to_int(m.get(f))
+                    if v:
+                        ctx = v
+                        break
+            if ctx:
+                break
+        if ctx:
+            break
+
+if ctx:
+    print(ctx)
+PY
+}
+
 resolve_profile_id() {
   local want="$1" out rc
   set +e
@@ -676,6 +883,9 @@ if [[ "$SKIP_CHECK" != "1" ]]; then
   preflight_check "$CCR_BASE_URL" "$TOKEN" "$PROFILE_ID" || exit 1
 fi
 
+# Pull path-independent settings written by CCR Desktop for this profile.
+import_ccr_wrapper_env "$PROFILE_ID"
+
 export ANTHROPIC_BASE_URL="$CCR_BASE_URL"
 export ANTHROPIC_AUTH_TOKEN="$TOKEN"
 unset ANTHROPIC_API_KEY
@@ -688,7 +898,61 @@ export ANTHROPIC_DEFAULT_HAIKU_MODEL="$DEFAULT_MODEL"
 export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
 export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1
 
+# The window Claude Code should assume for this model. Set after the wrapper
+# import above, so a value CCR wrote is still honoured if the model cannot be
+# resolved; and it may lower a value from modelSettings, which is what makes it
+# worth setting even when /autocompact once left a stale 800000 behind.
+CTX_WINDOW="$(resolve_context_window "$RAW_MODEL" || true)"
+CTX_SOURCE=""
+if [[ -n "${CTX_WINDOW:-}" ]]; then
+  export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$CTX_WINDOW"
+  CTX_SOURCE="$CTX_WINDOW"
+fi
+
 save_last_profile "$PROFILE_ID"
+
+# Optional: refresh pet statusline FX rate (USD→CNY etc.) if stale
+maybe_update_fx_rate() {
+  [[ "${PET_FX_UPDATE:-1}" == "0" ]] && return 0
+  local here updater
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  for updater in \
+    "${PET_FX_UPDATE_SCRIPT:-}" \
+    "$HOME/.claude/claude-pet/update-fx-rate.sh" \
+    "$here/../claudePet/scripts/update-fx-rate.sh"
+  do
+    [[ -n "$updater" && -x "$updater" ]] || continue
+    # fail-soft; keep launch fast
+    if command -v timeout >/dev/null 2>&1; then
+      timeout "${PET_FX_TIMEOUT:-3}" "$updater" 2>/dev/null || true
+    else
+      "$updater" 2>/dev/null || true
+    fi
+    return 0
+  done
+}
+maybe_update_fx_rate
+
+# Optional: refresh per-model $/MTok pricing table (same TTL pattern as FX)
+maybe_update_model_pricing() {
+  [[ "${PET_PRICING_UPDATE:-1}" == "0" ]] && return 0
+  local here updater
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  for updater in \
+    "${PET_PRICING_UPDATE_SCRIPT:-}" \
+    "$HOME/.claude/claude-pet/update-model-pricing.sh" \
+    "$here/../claudePet/scripts/update-model-pricing.sh"
+  do
+    [[ -n "$updater" && -x "$updater" ]] || continue
+    if command -v timeout >/dev/null 2>&1; then
+      timeout "${PET_PRICING_TIMEOUT:-5}" "$updater" 2>/dev/null || true
+    else
+      "$updater" 2>/dev/null || true
+    fi
+    return 0
+  done
+}
+maybe_update_model_pricing
 
 {
   echo "CCR profile: $PROFILE_ID"
@@ -698,6 +962,11 @@ save_last_profile "$PROFILE_ID"
     echo "Claude model: $DEFAULT_MODEL  ← $RAW_MODEL  (from $MODEL_SOURCE)"
   fi
   echo "CCR: $ANTHROPIC_BASE_URL"
+  if [[ -n "$CTX_SOURCE" ]]; then
+    echo "Context window: $CTX_SOURCE tokens"
+  else
+    echo "Context window: unresolved, Claude Code will assume 200000"
+  fi
 } >&2
 
 exec claude "${PASS_ARGS[@]}"
