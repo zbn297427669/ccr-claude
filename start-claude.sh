@@ -242,6 +242,14 @@ try:
         if not model:
             model = settings_model(pid, scope)
         token = token_for(con, pid)
+        # The profile's allowed models, so the launcher can offer them as a
+        # menu. Kept as the gateway spells them (Provider/model) because that
+        # is what --model has to receive; the picker shows the short form and
+        # passes the long one through untouched.
+        avail = p.get("availableModels") or p.get("available_models") or []
+        avail = [m for m in avail if isinstance(m, str) and m.strip()]
+        if model and model not in avail:
+            avail.insert(0, model)
         out.append(
             {
                 "id": pid,
@@ -252,6 +260,7 @@ try:
                 "scope": scope,
                 "mtime": mtime_for(pid, scope),
                 "has_token": bool(token),
+                "available": avail,
             }
         )
     json.dump(out, sys.stdout, ensure_ascii=False)
@@ -306,6 +315,22 @@ elif mode == "active":
         sys.exit(1)
     for p in cands:
         print(f"{p.get('id') or ''}\t{p.get('name') or ''}\t{p.get('short') or ''}")
+elif mode == "models":
+    # One line per selectable model for a profile: long\tname\tshort
+    # where long is what --model must receive. The profile's current model is
+    # already first in the list, so an empty answer picks the default.
+    # `short` lives in the shell, not in this heredoc, so it is spelled out.
+    def _short(m):
+        m = (m or "").strip()
+        m = m.rsplit("/", 1)[-1]
+        return m.split("[", 1)[0]
+
+    want = arg
+    for p in profiles:
+        if want and p.get("id") != want:
+            continue
+        for m in (p.get("available") or []):
+            print(f"{m}\t{_short(m)}\t{p.get('id') or ''}")
 elif mode == "resolve":
     want = arg
     matches = []
@@ -474,7 +499,11 @@ req = urllib.request.Request(
     method="POST",
 )
 try:
-    with urllib.request.urlopen(req, timeout=8) as r:
+    # A local engine cold-starts this in about 19 s here: the prompt is tiny but
+    # the first request pays the KV setup. 8 s reported "could not verify" on a
+    # model that was working, which is worse than saying nothing -- the operator
+    # reads it as a fault.
+    with urllib.request.urlopen(req, timeout=45) as r:
         r.read(4096)
     print("ok")
 except urllib.error.HTTPError as e:
@@ -763,6 +792,76 @@ pick_profile() {
   done
 }
 
+# Which model to use for this profile.
+#
+# Only offered when the profile allows more than one and stdin is a terminal.
+# A piped run, a -p run, or a single-model profile all take the default without
+# asking: a prompt in a script is a hang, and a menu of one is noise.
+#
+# The list comes from the profile's availableModels, which is also what CCR's
+# gateway enforces -- so anything offered here is something the gateway will
+# accept. The current model is first, so pressing Enter keeps today's behaviour.
+pick_model() {
+  local pid="$1" force="${2:-0}"
+  # Declared non-empty: `set -u` treats an unset array as an error even when
+  # the reference is guarded by a count check, because the count itself was
+  # read from an unset variable.
+  local -a longs=() shorts=()
+  local long short_line i choice default_idx=1 mark
+
+  while IFS=$'\t' read -r long short_line _; do
+    [[ -z "$long" ]] && continue
+    longs+=("$long")
+    shorts+=("$short_line")
+  done < <(profiles_query models "$pid" || true)
+
+  [[ ${#longs[@]} -gt 0 ]] || return 1
+
+  # One choice is still worth showing when asked for explicitly: the caller
+  # then gets confirmation of what will run instead of silence.
+  if [[ ${#longs[@]} -eq 1 && "$force" != "1" ]]; then
+    printf '%s' "${longs[0]}"
+    return 0
+  fi
+
+  if [[ "$force" != "1" ]]; then
+    [[ -t 0 ]] || { printf '%s' "${longs[0]}"; return 0; }
+    [[ "${CCR_NO_PICK:-0}" == "1" ]] && { printf '%s' "${longs[0]}"; return 0; }
+    for a in "${PASS_ARGS[@]+"${PASS_ARGS[@]}"}"; do
+      [[ "$a" == "-p" || "$a" == "--print" ]] && { printf '%s' "${longs[0]}"; return 0; }
+    done
+  fi
+
+  {
+    echo "Models this profile allows — pick one:"
+    for i in "${!longs[@]}"; do
+      mark=""
+      ((i == 0)) && mark="  (current)"
+      printf "  %d) %s%s\n" "$((i + 1))" "${shorts[i]}" "$mark"
+    done
+    echo "  0) cancel"
+  } >&2
+
+  while true; do
+    choice=""
+    if [[ -t 0 ]]; then
+      read -r -p "Number [${default_idx}]: " choice || choice=""
+    else
+      read -r choice || choice=""
+    fi
+    choice="${choice:-$default_idx}"
+    if [[ "$choice" == "0" ]]; then
+      echo "Cancelled." >&2
+      exit 130
+    fi
+    if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#longs[@]})); then
+      printf '%s' "${longs[choice - 1]}"
+      return 0
+    fi
+    echo "Invalid number, try again." >&2
+  done
+}
+
 # 网关可达 + 当前 profile token 可用
 preflight_check() {
   local base="$1" token="$2" profile="$3"
@@ -850,6 +949,7 @@ PROFILE_WANT="${CCR_PROFILE:-}"
 RAW_MODEL="${MODEL:-}"
 MODEL_SOURCE=""
 FORCE_PICK=0
+FORCE_PICK_MODEL=0
 SKIP_CHECK="${CCR_SKIP_CHECK:-0}"
 PASS_ARGS=()
 
@@ -872,6 +972,7 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     --pick) FORCE_PICK=1; shift ;;
+    --pick-model) FORCE_PICK_MODEL=1; shift ;;
     --skip-check) SKIP_CHECK=1; shift ;;
     --profile)
       PROFILE_WANT="${2:-}"
@@ -925,6 +1026,9 @@ TOKEN="$(read_profile_token "$PROFILE_ID")" || {
 
 PROFILE_MODEL="$(profiles_query field "${PROFILE_ID}"$'\t'"model" || true)"
 
+# A model named on the command line (or in MODEL) is a decision already made;
+# only the fall-through-to-the-profile case offers the menu.
+MODEL_PICKED=""
 if [[ -n "${MODEL:-}" && -z "$MODEL_SOURCE" ]]; then
   RAW_MODEL="$MODEL"
   MODEL_SOURCE="MODEL env"
@@ -935,6 +1039,16 @@ elif [[ -z "$RAW_MODEL" ]]; then
   else
     echo "Profile $PROFILE_ID has no model configured." >&2
     exit 1
+  fi
+  # Offer the profile's other models. pick_model prints the default and asks
+  # nothing when the profile allows one model, when stdin is not a terminal, or
+  # when -p is among the forwarded arguments -- so a script never sees a prompt.
+  if picked="$(pick_model "$PROFILE_ID" "${FORCE_PICK_MODEL:-0}")" && [[ -n "$picked" ]]; then
+    if [[ "$picked" != "$RAW_MODEL" ]]; then
+      MODEL_PICKED="$picked"
+      RAW_MODEL="$picked"
+      MODEL_SOURCE="picked"
+    fi
   fi
 elif [[ -z "$MODEL_SOURCE" ]]; then
   MODEL_SOURCE="arg"
@@ -999,7 +1113,18 @@ fi
 
 # Whether Claude Code can talk to this model at all. Probed before launch so the
 # answer appears above the session rather than as a 400 halfway through it.
-DEFER_CAP="$(probe_defer_support "$DEFAULT_MODEL" "$TOKEN" "$CCR_BASE_URL" || true)"
+#
+# Off by default. A local engine cold-starts the probe in about 19 s here -- the
+# prompt is one token but the first request pays KV setup -- and that is a long
+# silence before anything appears, spent predicting a failure that a compat shim
+# in front of the engine already prevents. The probe was written when the shim
+# did not exist; now that it does, the common case is a model that works.
+#
+# CCR_CAPABILITY_CHECK=on probes anyway. The function is kept because the
+# failure it detects is real for anyone running without the shim.
+if [[ "${CCR_CAPABILITY_CHECK:-}" == "on" ]]; then
+  DEFER_CAP="$(probe_defer_support "$DEFAULT_MODEL" "$TOKEN" "$CCR_BASE_URL" || true)"
+fi
 
 save_last_profile "$PROFILE_ID"
 
