@@ -65,6 +65,7 @@ ccr-claude --skip-check    # 跳过网关 / token 预检
 | `CCR_NO_PICK=1` | 不弹菜单；优先上次选择，否则最近修改 |
 | `CCR_SKIP_CHECK=1` | 跳过网关 / token 预检 |
 | `CCR_CONTEXT_WINDOW` | 覆盖自动解析到的窗口值（token 数）；`off` 关闭自动解析 |
+| `CCR_CAPABILITY_CHECK` | `off` 关闭启动前的能力探测（探测模型是否接受 Claude Code 请求的 `defer_loading`） |
 | `MODEL` / `--model` | 临时覆盖模型 |
 
 ### `CCR_DIR` 自动发现顺序

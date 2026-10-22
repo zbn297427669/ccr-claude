@@ -65,6 +65,7 @@ The script also resolves the model’s real context window and passes it to Clau
 | `CCR_NO_PICK=1` | Skip interactive menu; prefer last used, else newest |
 | `CCR_SKIP_CHECK=1` | Skip gateway / token preflight |
 | `CCR_CONTEXT_WINDOW` | Override the resolved context window (token count); `off` disables resolution |
+| `CCR_CAPABILITY_CHECK` | `off` disables the pre-launch probe for `defer_loading` support |
 | `MODEL` / `--model` | Temporary model override |
 
 ### Auto-discovery order for `CCR_DIR`

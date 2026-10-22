@@ -260,9 +260,84 @@ CCR_CONTEXT_WINDOW=off ./start-claude.sh      # 关掉自动解析
 Context window: 262144 tokens
 ```
 
+### 能力探测：这个模型 Claude Code 能用吗
+
+窗口解析解决「压在哪里」，但还有一层能不能用的问题。Claude Code 每次请求都会给
+一个内置占位工具加 `defer_loading: true`，没有 deferred tool loader 的上游会
+**拒绝整个请求**（不是拒绝那个工具）。
+
+客户端侧关不掉：
+
+| 尝试 | 结果 |
+| --- | --- |
+| `--disallowedTools ToolSearch` | 仍然发送 |
+| `--disallowedTools ToolSearch DeferredToolPlaceholder` | 仍然发送 |
+| `--strict-mcp-config` + 空 MCP | 仍然发送 |
+
+MCP 服务有一个 `alwaysLoad` 逃生舱（等价于 `defer_loading: false`），但只对用户
+自己配的 MCP 服务有效，管不到这个内置占位工具。抓包确认，请求里 12 个工具，只有
+`DeferredToolPlaceholder` 带这个标记。
+
+所以脚本在启动前发一个最小的探测请求，把结论打在启动信息里，而不是让会话跑到
+一半才撞上 400：
+
+```
+Tools: UNUSABLE -- this model rejects defer_loading, which Claude Code
+       sends on every request. Use a cloud model for now; see
+       CONTEXT-WINDOW.md. Set CCR_CAPABILITY_CHECK=off to skip this check.
+```
+
+只有上游明确用「不支持 deferred」这类措辞拒绝时才报这句。超时、401、连接不上
+都归为「无法确认」，不当作结论——免得把网络问题说成能力问题。
+
+```bash
+CCR_CAPABILITY_CHECK=off ./start-claude.sh   # 跳过探测
+```
+
+这条针对的是引擎侧的限制（NInfer 明确返回 `deferred_tools_not_supported`），
+客户端和 CCR 都改不了。已提 CCR 侧 issue #1912。
+
 ---
 
-## 六、还剩下什么没解决
+## 六、多会话并发
+
+多个 Claude Code 会话同时连本地模型，实测结果分两段。
+
+### 能工作，但串行
+
+中间层自己支持并发：`ThreadingHTTPServer` 每请求一线程，3 并发、6 并发、
+「长流式 + 两个短请求 + 一个 GET」的混合负载全部成功，互不阻塞。
+
+变慢的是引擎侧。6 个并发请求的单次耗时是 0.5 / 2.0 / 3.2 秒，总耗时 3.2 秒
+——**等于最慢那个**，说明请求在引擎里排队。引擎以 `--max-concurrency 1`
+启动（`bin\ninfer.bat` 固定传这个值），这是设计如此，不是中间层造成的。
+
+### 出现过一次串话，未能复现
+
+第一轮测试中，三个并发会话要求各自回答「会话1/2/3」，其中会话 2 回答的是
+一段完全无关的系统进程描述。之后两轮 6 次全部正确，没有复现。
+
+当时的引擎状态：
+
+```
+context cache | 1 active + 1 cached device states | host 8 states | 8.00 GiB KV
+              | private 2 | shared 0 | anchors 2
+```
+
+`shared 0` 说明共享前缀缓存已经关掉了（`--max-shared-prefixes 0`），所以不是
+跨请求共享缓存串味。剩下的可能就是**状态换入换出**：三个请求排队，唯一那个
+活跃槽位要反复装卸，偶发地把上一个会话的状态带进了下一个。
+
+这只影响那一次回答的质量，不会崩溃、不会写错数据。但如果你要同时开多个会话
+跑重要任务，值得知道它可能发生。
+
+能彻底隔离的做法是多个引擎实例（各占一份显存），代价是显存翻倍——27B 模型
+在这个配置下余量不够。`--no-prefix-reuse` 可以进一步降低复用，但会让多轮对话
+明显变慢，而且它与现有的 `--max-shared-prefixes` 互斥，需要改启动参数。
+
+---
+
+## 七、还剩下什么没解决
 
 - **§4.1 那个问题脚本补不了。** 本地模型的别名不在网关缓存里，
   autocompact 就不跑——窗口设得再对也没用。这需要在 CCR 侧让
@@ -276,7 +351,7 @@ Context window: 262144 tokens
 
 ---
 
-## 七、排查用的命令
+## 八、排查用的命令
 
 ```bash
 # 当前实际使用的窗口与档位

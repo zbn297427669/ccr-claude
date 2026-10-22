@@ -427,6 +427,75 @@ import_ccr_wrapper_env() {
   done <"$wrapper"
 }
 
+# Can this model accept the request shape Claude Code sends?
+#
+# Claude Code puts defer_loading: true on one built-in placeholder tool in every
+# request. An upstream that has no deferred tool loader rejects the whole request
+# with a 400 -- not the tool, the request -- so the model cannot be used at all.
+# Neither side is wrong: Claude Code is optimising, and the engine is entitled
+# to refuse a field it cannot honour. They simply never agreed.
+#
+# On the client side this cannot be turned off. --disallowedTools does not reach
+# the placeholder, an empty --mcp-config does not remove it, and the documented
+# alwaysLoad escape hatch only covers user-configured MCP servers.
+#
+# So probe instead of guessing: send the smallest request that carries the flag,
+# and report what came back. A model that answers is fine; one that refuses with
+# deferred-tool language is unusable through Claude Code until CCR or the engine
+# changes. Any other failure (not running, auth, timeout) says nothing about this
+# capability and is reported as unknown rather than as a verdict.
+#
+# Returns: ok | no-defer | unknown | (empty, when there is nothing to probe)
+# Disable with CCR_CAPABILITY_CHECK=off.
+probe_defer_support() {
+  local model="$1" token="$2" base="$3"
+  [[ "${CCR_CAPABILITY_CHECK:-}" == "off" ]] && return 0
+  [[ -n "$model" && -n "$base" ]] || return 0
+
+  python3 - "$base" "$model" "$token" <<'PY' 2>/dev/null || true
+import json, sys, urllib.error, urllib.request
+
+base, model, token = sys.argv[1], sys.argv[2], sys.argv[3]
+body = {
+    "model": model,
+    "max_tokens": 1,
+    "messages": [{"role": "user", "content": "ping"}],
+    "tools": [{
+        "name": "probe",
+        "description": "capability probe",
+        "input_schema": {"type": "object", "properties": {}},
+        "defer_loading": True,
+    }],
+}
+req = urllib.request.Request(
+    base.rstrip("/") + "/v1/messages",
+    data=json.dumps(body).encode(),
+    headers={"content-type": "application/json", "authorization": "Bearer " + token},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout=8) as r:
+        r.read(4096)
+    print("ok")
+except urllib.error.HTTPError as e:
+    text = ""
+    try:
+        text = e.read().decode("utf-8", "replace")
+    except Exception:
+        pass
+    low = text.lower()
+    if "defer" in low and ("not support" in low or "unsupported" in low
+                           or "does not provide" in low):
+        print("no-defer")
+    elif e.code in (401, 403):
+        print("unknown")
+    else:
+        print("unknown")
+except Exception:
+    print("unknown")
+PY
+}
+
 # Ask the model how big its context is, instead of asking the user.
 #
 # Why this exists: Claude Code and CCR have no channel for this value. CCR knows
@@ -896,7 +965,26 @@ export ANTHROPIC_DEFAULT_OPUS_MODEL="$DEFAULT_MODEL"
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="$DEFAULT_MODEL"
 
 export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
-export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1
+
+# CCR sets this to 1 unconditionally (its asar has a one-line function that
+# does nothing else), and the wrapper import above honours that. It has to be
+# turned off here, because of what "1" means.
+#
+# With it at 1, Claude Code reverts to "wait for the API to complain" for any
+# model it has no catalogue entry for: it does not compact on its own, it waits
+# for the server to reject the request. That is a defensible choice for a hosted
+# API, which answers `prompt too long` and lets the client retry.
+#
+# It is the wrong choice for this engine, which answers by failing. Measured:
+# the same local model with MAX_CONTEXT_TOKENS=262144 compacts at 242144 when
+# this is 0, and skips the threshold check entirely when it is 1 -- no
+# `autocompact:` line in --debug at all, so a session grows until the engine
+# refuses it.
+#
+# Setting it to 0 costs nothing for cloud models: they are in the gateway
+# catalogue, so they resolve before this variable is consulted. Verified -- a
+# cloud model measures effectiveWindow=108000 with the flag at either value.
+export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=0
 
 # The window Claude Code should assume for this model. Set after the wrapper
 # import above, so a value CCR wrote is still honoured if the model cannot be
@@ -908,6 +996,10 @@ if [[ -n "${CTX_WINDOW:-}" ]]; then
   export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$CTX_WINDOW"
   CTX_SOURCE="$CTX_WINDOW"
 fi
+
+# Whether Claude Code can talk to this model at all. Probed before launch so the
+# answer appears above the session rather than as a 400 halfway through it.
+DEFER_CAP="$(probe_defer_support "$DEFAULT_MODEL" "$TOKEN" "$CCR_BASE_URL" || true)"
 
 save_last_profile "$PROFILE_ID"
 
@@ -967,6 +1059,16 @@ maybe_update_model_pricing
   else
     echo "Context window: unresolved, Claude Code will assume 200000"
   fi
+  case "${DEFER_CAP:-}" in
+    no-defer)
+      echo "Tools: UNUSABLE -- this model rejects defer_loading, which Claude Code"
+      echo "       sends on every request. Use a cloud model for now; see"
+      echo "       CONTEXT-WINDOW.md. Set CCR_CAPABILITY_CHECK=off to skip this check."
+      ;;
+    unknown)
+      echo "Tools: could not verify (probe failed or was refused); not a verdict"
+      ;;
+  esac
 } >&2
 
 exec claude "${PASS_ARGS[@]}"
