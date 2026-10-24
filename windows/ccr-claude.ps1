@@ -869,13 +869,19 @@ try {
 catch { }
 
 # ---------------------------------------------------------------- 找 claude
-# 三种来源，按顺序：
-#   1. CCR_CLAUDE_EXE —— 一个 exe 路径，或含 claude-*.exe 的目录
+# 四种来源，按顺序：
+#   1. CCR_CLAUDE_EXE —— 一个可执行文件，或含 claude* 的目录
 #   2. PATH 上的 claude
-#   3. 本脚本同目录的 claude-*-win32-x64.exe
+#   3. 本脚本同目录的 claude.exe / claude.cmd（不带版本号的正常安装名）
+#   4. 本脚本同目录的 claude-<version>-win32-x64.exe（下载后随手放的）
 #
-# 第 3 条曾经是唯一可行的办法，于是脚本被迫和 296MB 的 exe 住在同一个手抄
+# 第 3、4 条曾经是唯一可行的办法，于是脚本被迫和 296MB 的 exe 住在同一个手抄
 # 目录里，仓库一更新它就过期。第 1 条把两者解开：exe 留在原地，脚本留在仓库。
+#
+# 3 排在 4 前面，是因为目录里同时有两者时，"claude.exe" 才是那个正常安装的
+# 入口；下载来的版本化 exe 只是同一份东西的另一个名字。原先按名字降序取第一
+# 个，`claude-2.1.310-win32-x64.exe` 会排在 `claude.exe` 之前（'-' 在 '.' 之前
+# 比较时有序），于是选中了版本化那份——反了。
 function Find-ClaudeExe {
     $want = $env:CCR_CLAUDE_EXE
     if ($want) {
@@ -883,7 +889,10 @@ function Find-ClaudeExe {
         if (Test-Path -LiteralPath $want -PathType Container) {
             $hit = Get-ChildItem -LiteralPath $want -Filter 'claude*' -File -ErrorAction SilentlyContinue |
                 Where-Object { $_.Extension -in '.exe', '.cmd', '.bat' } |
-                Sort-Object Name -Descending | Select-Object -First 1
+                # 无版本号的名字优先；同一类里按名字降序，让新版胜出。
+                Sort-Object @{ Expression = { if ($_.Name -notmatch '-\d+\.\d+') { 0 } else { 1 } } },
+                            @{ Expression = { $_.Name }; Descending = $true } |
+                Select-Object -First 1
             if ($hit) { return $hit.FullName }
         }
         Stop-With "CCR_CLAUDE_EXE points at nothing runnable: $want"
@@ -891,9 +900,11 @@ function Find-ClaudeExe {
     $c = Get-Command claude -ErrorAction SilentlyContinue
     if ($c) { return $c.Source }
     $here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-    $local = Get-ChildItem -Path $here -Filter 'claude-*-win32-x64.exe' -File -ErrorAction SilentlyContinue |
-        Sort-Object Name -Descending | Select-Object -First 1
-    if ($local) { return $local.FullName }
+    foreach ($pattern in @('claude.exe', 'claude.cmd', 'claude-*-win32-x64.exe')) {
+        $local = Get-ChildItem -Path $here -Filter $pattern -File -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending | Select-Object -First 1
+        if ($local) { return $local.FullName }
+    }
     return $null
 }
 
