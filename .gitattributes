@@ -1,0 +1,5 @@
+# The PowerShell launcher must ship as UTF-8 with BOM and CRLF: PowerShell 5.1
+# decodes a BOM-less .ps1 as GBK, and .cmd files want CRLF for the old parser.
+*.ps1   text eol=crlf
+*.cmd   text eol=crlf
+*.sh    text eol=lf

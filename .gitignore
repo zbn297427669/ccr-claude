@@ -1,5 +1,10 @@
 .DS_Store
+Thumbs.db
 *.swp
 .env
 .env.*
 *.local
+
+# Claude Code binaries are hundreds of MB; never commit them.
+*.exe
+*.msi

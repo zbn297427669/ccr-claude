@@ -1,97 +1,88 @@
-# ccr-claude (`start-claude.sh`)
+# ccr-claude
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-Launch [Claude Code](https://code.claude.com/) on Linux/WSL through a local [Claude Code Router (CCR)](https://github.com/musistudio/claude-code-router) gateway, using the same Agent profiles as CCR Desktop.
+Launch [Claude Code](https://code.claude.com/) through a local [Claude Code Router (CCR)](https://github.com/musistudio/claude-code-router) gateway, reusing the Agent profiles you already configured in CCR Desktop.
 
-## Why
+Two launchers, one behaviour:
 
-CCR Desktop writes profile tokens and model settings on the machine where it runs (often Windows). This script discovers that data at runtime so WSL/Linux can start `claude` without hardcoding secrets or usernames.
+| Platform | Entry point | Docs |
+| --- | --- | --- |
+| Windows | `windows/ccr-claude.ps1` (plus `ccr-claude.cmd` shell) | [windows/README.md](./windows/README.md) |
+| Linux / WSL | `wsl/start-claude.sh` | [wsl/README.md](./wsl/README.md) |
 
-## Use cases
+Both discover the CCR data directory, the gateway URL, the profile's client key, and the model's real context window at runtime. **Nothing secret or machine-specific lives in this repo**: no tokens, no absolute home paths.
 
-This project is for people who already run **CCR as a local gateway** and want **Claude Code CLI** to use those same agents from a Unix shell.
+## Why two launchers
 
-| Scenario | What you get |
-| --- | --- |
-| **Windows CCR + WSL Claude Code** | CCR Desktop runs on Windows (`localhost:3456`); you work in WSL projects and launch Claude Code with `ccr-claude` instead of hand-exporting env vars. |
-| **Several CCR agents (multi-provider)** | e.g. one agent for a domestic provider, another for DeepSeek. The script lists **enabled** Claude Code agents and lets you pick by number, or pin one with `--profile`. |
-| **Shareable launcher, private credentials** | The repo stays free of tokens and usernames. Each machine reads its own CCR `config.sqlite` / profile helpers at runtime. |
-| **Any project directory** | Install once on `PATH`, then `cd` into a repo and run `ccr-claude` — the project root is your current working directory. |
+The two platforms fail differently, so the fixes differ:
 
-### Requirements (runtime)
+- **Linux / WSL** — `claude` is already on `PATH`; the launcher just needs to find Windows' CCR database across `/mnt/c`. Settings are written by the script itself.
+- **Windows** — CCR Desktop generates `settings.json` *and* a wrapper `.cmd` that hardcode `ANTHROPIC_API_KEY`-adjacent settings, and a `settings.json` `env` block outranks process environment variables. The PowerShell launcher therefore writes a `--settings` overlay to push its values back on top, and skips the generated wrapper entirely.
 
-- CCR gateway is running and reachable (default `http://127.0.0.1:3456`)
-- At least one **Claude Code** agent is enabled in CCR, with a valid client key and model
-- Official `claude` CLI installed on the Linux/WSL side
+Everything else — which profile, which model, which context window — is the same logic in both. See [CONTEXT-WINDOW.md](./CONTEXT-WINDOW.md) for the long version of what CCR does not tell Claude Code, and how the launchers fill the gap.
 
-### Not in scope
+## Layout
 
-- Replacing CCR Desktop configuration or provider setup
-- Talking to Anthropic (or other providers) **without** CCR
-- Running the Windows-only `ccr-app "…"` launcher inside WSL (this script is the WSL/Linux counterpart)
+```
+.
+├── README.md            this file
+├── README.zh-CN.md
+├── CONTEXT-WINDOW.md    why the context window has to be passed by hand
+├── LICENSE              MIT
+├── windows/
+│   ├── ccr-claude.ps1   real entry point
+│   ├── ccr-claude.cmd   thin shell for double-click / cmd
+│   ├── README.md
+│   └── README.zh-CN.md
+└── wsl/
+    ├── start-claude.sh  real entry point
+    ├── README.md
+    └── README.zh-CN.md
+```
 
-## Install
+## Quick start
+
+**Windows** (PowerShell):
+
+```powershell
+$repo = 'C:\path\to\ccr-claude'
+[Environment]::SetEnvironmentVariable(
+  'Path', "$repo\windows;" + [Environment]::GetEnvironmentVariable('Path','User'), 'User')
+```
+
+```bat
+ccr-claude                      :: profile menu when several are enabled
+ccr-claude --pick-model         :: then the model menu
+ccr-claude -p "explain this repo"
+```
+
+**Linux / WSL**:
 
 ```bash
+cd wsl
 chmod +x start-claude.sh
 ln -sfn "$(pwd)/start-claude.sh" ~/.local/bin/ccr-claude
-```
 
-Requires: `bash`, `python3`, `claude` on `PATH`, and a running CCR gateway.
-
-## Usage
-
-```bash
-ccr-claude                 # pick among enabled agents if more than one
 ccr-claude --list-profiles
-ccr-claude --profile <id-or-name-substring>
-ccr-claude --model <name>
-ccr-claude --skip-check    # skip gateway / token preflight
 ```
 
-Before starting Claude Code, the script checks that the CCR gateway is reachable and that the selected profile’s client key can call `/v1/models`. The last chosen profile is remembered under `~/.config/ccr-claude/last-profile` and preferred next time.
+## Shared concepts
 
-The script also resolves the model’s real context window and passes it to Claude Code (`CLAUDE_CODE_MAX_CONTEXT_TOKENS`), printing `Context window: <N> tokens` at startup. If nothing can be resolved it sets nothing rather than guessing. For why this is needed and what is missing between CCR and Claude Code, see [CONTEXT-WINDOW.md](./CONTEXT-WINDOW.md).
-
-## Configuration (no secrets in the repo)
-
-| Variable | Purpose |
+| Concept | Behaviour on both platforms |
 | --- | --- |
-| `CCR_DIR` | CCR data dir containing `config.sqlite` |
-| `CCR_BASE_URL` | Gateway URL (else read from CCR config) |
-| `CLAUDE_CONFIG_DIR` | Global Claude `settings.json` dir |
-| `CCR_PROFILE` / `--profile` | Select agent (errors if the substring matches more than one) |
-| `CCR_NO_PICK=1` | Skip interactive menu; prefer last used, else newest |
-| `CCR_SKIP_CHECK=1` | Skip gateway / token preflight |
-| `CCR_CONTEXT_WINDOW` | Override the resolved context window (token count); `off` disables resolution |
-| `CCR_CAPABILITY_CHECK` | `off` disables the pre-launch probe for `defer_loading` support |
-| `MODEL` / `--model` | Temporary model override |
-
-### Auto-discovery order for `CCR_DIR`
-
-1. `$CCR_DIR` if set  
-2. `$XDG_CONFIG_HOME/claude-code-router` or `~/.config/claude-code-router`  
-3. `~/AppData/Roaming/claude-code-router`  
-4. WSL: first `/mnt/c/Users/*/AppData/Roaming/claude-code-router` that has `config.sqlite`
-
-### What is read at runtime (never committed)
-
-| Field | Source |
-| --- | --- |
-| Profile list / enabled / model | `config.sqlite` → `app_config.default.profile.profiles` |
-| Client API token | `api_keys` row `profile:<id>`, or `bin/ccr-claude-code-api-key-<id>.cmd` |
-| Gateway URL | `routerEndpoint` / `gateway.host:port` |
-| Global settings model | `$CLAUDE_CONFIG_DIR/settings.json` or derived `…/Users/<name>/.claude` |
-
-Long CCR model ids like `Provider/model[1m]` are normalized to the upstream short name (`model`).
+| Profile selection | Only **enabled** Claude Code agents with a model *and* a client key are offered. The last choice is remembered and listed first. |
+| Model selection | The menu comes from the profile's `availableModels` — the same list CCR's gateway enforces, so every entry routes. Short names are shown, the full CCR name is passed on. |
+| Silent by default | No prompt when only one choice exists, when stdin is not a terminal, when `-p`/`--print` is being forwarded, or when `CCR_NO_PICK=1`. `--pick` / `--pick-model` force it. |
+| Context window | Resolved from the provider's `/v1/models` (loopback only), then CCR's `modelMetadata`, then the per-machine catalog. If none of them answer, nothing is set — guessing moves the compaction point silently. |
+| Diagnostics | Startup lines (profile, model, gateway, window) go to **stderr**; only Claude's answer goes to **stdout**, so `2>/dev/null` is safe. |
 
 ## Security notes
 
-- Do **not** put `ccr-profile-…` tokens, provider API keys, or absolute home paths in this script.
+- No tokens, provider keys, or absolute home paths are committed. Every machine reads its own CCR `config.sqlite` and profile helpers at runtime.
 - Tokens are exported only into the child `claude` process via `ANTHROPIC_AUTH_TOKEN`.
-- Status lines print profile id and model, never the token.
-- If a profile token returns 401, re-save/enable that agent in CCR Desktop (or restart the gateway); do not paste keys into git.
+- Status lines print the profile id and model, never the token.
+- If a profile returns 401, re-save or re-enable that agent in CCR Desktop — do not paste keys into git.
 
 ## License
 

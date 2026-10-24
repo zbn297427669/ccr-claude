@@ -156,8 +156,8 @@ CCR 生成 `bin/ccr-claude-code-wrapper-<profile>.cmd` 时会写：
 set CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000
 ```
 
-这个值**会被 Claude Code 截到 800000**（实测 900000/1000000 都得 780000
-有效窗口）。也就是说设 1M 从来没生效过。
+这个值**会被 Claude Code 换算成 980000**（`MAX − 20000`，2.1.310 实测）。
+早期版本会截到 800000，现已无此硬顶。
 
 改的地方是 **CCR → 设置 → Claude Code → profile → Environment**，
 不是直接改 wrapper（会被重新生成覆盖）。
@@ -191,23 +191,35 @@ set CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000
 `settings.json` 里 `ANTHROPIC_DEFAULT_*_MODEL` 都写成 `Go/deepseek-v4-flash[1m]`。
 带 `[1m]` 后缀的模型，`--debug` 里没有 `autocompact:` 行。
 
-### 4.3 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 有 800000 硬顶
+### 4.3 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 的换算
 
-实测映射：
+实测映射（Claude Code 2.1.310）：
 
 ```
 400000 → 380000      700000 → 680000
 799999 → 779999      800000 → 780000
-800001 → 780000      1000000 → 780000
+800001 → 800001      1000000 → 980000      1048576 → 1028576
 ```
 
-**800000 是天花板**，超过的部分直接丢弃，没有任何提示。
+规则就是 **`effectiveWindow = MAX − 20000`**（20000 是输出预留）。
 
-### 4.4 `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT` 不一定有用
+> **更正（2026-10-24）**：本文早期版本说「800000 是天花板，超过的部分直接丢弃」，
+> 那是旧版本的行为。2.1.310 上已无此硬顶，`1000000` 实测给到 `980000`。
+> 未设 MAX 时退回模型默认 200000（`effectiveWindow=180000`）。
 
-它会让窗口来源变成 `auto`，而 `source === "auto"` 时阈值检查会被跳过。
-但实测中，它没有关掉 autocompact（只是把来源标成 auto）。
-保留它可能是为了别的目的，排查时别默认它是无害的。
+### 4.4 `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1` 会关掉 autocompact
+
+**更正（2026-10-24）**：本节早期版本说「没关掉 autocompact」，实测是**错的**。
+
+`--debug --debug-file` 输出的 `autocompact: … effectiveWindow=` 这一行：
+
+| 配置 | `autocompact` 行 |
+| --- | --- |
+| `DISABLE=1` + 任意 MAX | **整行消失**，阈值检查被跳过 |
+| `DISABLE=0` | 正常出现，值 = MAX − 20000 |
+
+同一模型、同一 MAX 只翻这一个开关，行为就反转。后果是会话一路长到引擎拒绝为止，
+没有任何提示。**保持 `0`。**
 
 ### 4.5 `--settings` 是合并，不是替换
 
@@ -231,7 +243,7 @@ set CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000
 
 ---
 
-## 五、`start-claude.sh` 的处理
+## 五、启动器（`wsl/start-claude.sh` / `windows/ccr-claude.ps1`）的处理
 
 已知 CCR 和 Claude Code 之间没有窗口通道，所以脚本自己补上这一环：
 启动前解析出当前模型的真实窗口，通过 `CLAUDE_CODE_MAX_CONTEXT_TOKENS`
@@ -250,8 +262,8 @@ set CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000
 覆盖方式：
 
 ```bash
-CCR_CONTEXT_WINDOW=131072 ./start-claude.sh   # 手动指定
-CCR_CONTEXT_WINDOW=off ./start-claude.sh      # 关掉自动解析
+CCR_CONTEXT_WINDOW=131072 ccr-claude   # 手动指定
+CCR_CONTEXT_WINDOW=off ccr-claude      # 关掉自动解析
 ```
 
 启动时会打印一行，例如：
@@ -291,7 +303,7 @@ Tools: UNUSABLE -- this model rejects defer_loading, which Claude Code
 都归为「无法确认」，不当作结论——免得把网络问题说成能力问题。
 
 ```bash
-CCR_CAPABILITY_CHECK=off ./start-claude.sh   # 跳过探测
+CCR_CAPABILITY_CHECK=off ccr-claude   # 跳过探测
 ```
 
 这条针对的是引擎侧的限制（NInfer 明确返回 `deferred_tools_not_supported`），
@@ -346,8 +358,9 @@ context cache | 1 active + 1 cached device states | host 8 states | 8.00 GiB KV
   `OD/deepseek-v4.1-flash` 标 128000，但 CCR 自带的总 catalog
   （`models.json`，5092 条）里 `deepseek/deepseek-v4-1-flash` 标 1048576。
   两者矛盾，本机探测不到云端真实值，只能信 catalog。值得下次核对。
-- **`Go/qwen3.8-max` 标 1048576，但 `effectiveWindow` 上限定在 780000**，
-  实际永远吃不满。
+- **`Go/qwen3.8-max` 标 1048576，但受 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 全局钳制**
+  （2.1.310 上无 800000 硬顶，但用户 `settings.json` 若写 128000，它也一样被压到
+  108000）。要用满必须显式给 MAX。
 
 ---
 

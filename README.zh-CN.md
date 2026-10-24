@@ -1,97 +1,88 @@
-# ccr-claude (`start-claude.sh`)
+# ccr-claude
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-在 Linux / WSL 上通过本地 [Claude Code Router (CCR)](https://github.com/musistudio/claude-code-router) 网关启动 [Claude Code](https://code.claude.com/)，并复用 CCR 桌面端里的 Agent 配置。
+通过本地 [Claude Code Router (CCR)](https://github.com/musistudio/claude-code-router) 网关启动 [Claude Code](https://code.claude.com/)，直接复用 CCR 桌面端里已配好的 Agent。
 
-## 为什么需要它
+两个平台的启动器，同一套行为：
 
-CCR 桌面端会把各 Agent 的客户端密钥、模型等写在本机（常见是 Windows）。本脚本在运行时自动发现这些数据，让 WSL / Linux 能直接启动 `claude`，而无需在脚本里写死密钥或用户路径。
+| 平台 | 入口 | 文档 |
+| --- | --- | --- |
+| Windows | `windows/ccr-claude.ps1`（附 `ccr-claude.cmd` 薄壳） | [windows/README.zh-CN.md](./windows/README.zh-CN.md) |
+| Linux / WSL | `wsl/start-claude.sh` | [wsl/README.zh-CN.md](./wsl/README.zh-CN.md) |
 
-## 应用场景
+两者都在运行时自己发现 CCR 数据目录、网关地址、profile 的客户端密钥和模型的真实上下文窗口。**仓库里不含任何密钥或本机路径**。
 
-适合：**已经在用 CCR 做本地网关**，又希望在 Unix shell 里用 **Claude Code CLI** 复用同一套 Agent。
+## 为什么要两套
 
-| 场景 | 能解决什么 |
-| --- | --- |
-| **Windows 跑 CCR，WSL 里用 Claude Code** | CCR 桌面端在 Windows 监听网关（如 `localhost:3456`）；你在 WSL 项目目录工作，用 `ccr-claude` 启动，而不用每次手动 `export` 一堆环境变量。 |
-| **多个 CCR Agent / 多家上游** | 例如一个 Agent 走国内模型，另一个走 DeepSeek。脚本会列出 CCR 里 **已启用** 的 Claude Code Agent，用序号选择，或用 `--profile` 指定。 |
-| **启动器可开源，凭证留在本机** | 仓库不包含密钥和本机用户名；每台机器运行时读取自己的 CCR `config.sqlite` / profile 辅助脚本。 |
-| **任意项目目录启动** | 安装到 `PATH` 后，`cd` 进任意仓库再运行 `ccr-claude`，当前目录即为 Claude Code 的项目根目录。 |
+两个平台的坑不一样，补法也就不一样：
 
-### 运行前提
+- **Linux / WSL** —— `claude` 本来就在 `PATH` 里，启动器的主要工作是从 `/mnt/c` 跨过去找到 Windows 的 CCR 数据库。settings 由脚本自己写。
+- **Windows** —— CCR 桌面端生成的 `settings.json` 和 wrapper `.cmd` 会把关键项硬编码进去，而 `settings.json` 的 `env` 又压过进程环境变量。所以 PowerShell 版额外写一份 `--settings` 覆盖层把它们压回来，并且绕开生成的 wrapper。
 
-- CCR 网关已启动且可访问（默认 `http://127.0.0.1:3456`）
-- CCR 中至少有一个 **已启用** 的 Claude Code Agent，并具备有效的客户端密钥与模型
-- Linux / WSL 侧已安装官方 `claude` CLI
+其余部分——选哪个 profile、哪个模型、窗口多大——两边是同一套逻辑。CCR 没告诉 Claude Code 的那些事、启动器怎么补，见 [CONTEXT-WINDOW.md](./CONTEXT-WINDOW.md)。
 
-### 不在范围内
+## 目录结构
 
-- 替代 CCR 桌面端做供应商 / Agent 配置
-- **不经过 CCR** 直连 Anthropic 或其他上游
-- 在 WSL 内直接使用 Windows 专用的 `ccr-app "…"`（本脚本是对应的 Linux/WSL 启动方式）
+```
+.
+├── README.md            本文件
+├── README.zh-CN.md
+├── CONTEXT-WINDOW.md    为什么窗口要由启动器自己传
+├── LICENSE              MIT
+├── windows/
+│   ├── ccr-claude.ps1   正式入口
+│   ├── ccr-claude.cmd   双击 / cmd 用的薄壳
+│   ├── README.md
+│   └── README.zh-CN.md
+└── wsl/
+    ├── start-claude.sh  正式入口
+    ├── README.md
+    └── README.zh-CN.md
+```
 
-## 安装
+## 快速开始
+
+**Windows**（PowerShell）：
+
+```powershell
+$repo = 'C:\path\to\ccr-claude'
+[Environment]::SetEnvironmentVariable(
+  'Path', "$repo\windows;" + [Environment]::GetEnvironmentVariable('Path','User'), 'User')
+```
+
+```bat
+ccr-claude                      :: 多个 enabled Agent 时选 profile
+ccr-claude --pick-model         :: 再选模型
+ccr-claude -p "解释这个仓库"
+```
+
+**Linux / WSL**：
 
 ```bash
+cd wsl
 chmod +x start-claude.sh
 ln -sfn "$(pwd)/start-claude.sh" ~/.local/bin/ccr-claude
-```
 
-依赖：`bash`、`python3`、PATH 中的 `claude`，以及已启动的 CCR 网关。
-
-## 用法
-
-```bash
-ccr-claude                 # 多个 enabled Agent 时交互选序号
 ccr-claude --list-profiles
-ccr-claude --profile <id-或-名称片段>
-ccr-claude --model <名称>
-ccr-claude --skip-check    # 跳过网关 / token 预检
 ```
 
-启动前会检查 CCR 网关是否可达，以及所选 profile 的客户端密钥能否访问 `/v1/models`。上次选择的 profile 会记在 `~/.config/ccr-claude/last-profile`，下次优先使用。
+## 两边一致的行为
 
-脚本还会解析当前模型的真实上下文窗口并传给 Claude Code（`CLAUDE_CODE_MAX_CONTEXT_TOKENS`），启动时打印一行 `Context window: <N> tokens`。解析不到就不设，而不是猜一个值。为什么要这么做、CCR 和 Claude Code 之间缺了什么，见 [CONTEXT-WINDOW.md](./CONTEXT-WINDOW.md)。
-
-## 配置（仓库内不含密钥）
-
-| 变量 | 作用 |
+| 概念 | 两个平台的表现 |
 | --- | --- |
-| `CCR_DIR` | CCR 数据目录（含 `config.sqlite`） |
-| `CCR_BASE_URL` | 网关地址（未设置时从 CCR 配置读取） |
-| `CLAUDE_CONFIG_DIR` | 全局 Claude `settings.json` 所在目录 |
-| `CCR_PROFILE` / `--profile` | 指定 Agent（名称片段匹配多个时会报错列出） |
-| `CCR_NO_PICK=1` | 不弹菜单；优先上次选择，否则最近修改 |
-| `CCR_SKIP_CHECK=1` | 跳过网关 / token 预检 |
-| `CCR_CONTEXT_WINDOW` | 覆盖自动解析到的窗口值（token 数）；`off` 关闭自动解析 |
-| `CCR_CAPABILITY_CHECK` | `off` 关闭启动前的能力探测（探测模型是否接受 Claude Code 请求的 `defer_loading`） |
-| `MODEL` / `--model` | 临时覆盖模型 |
-
-### `CCR_DIR` 自动发现顺序
-
-1. 若已设置 `$CCR_DIR`  
-2. `$XDG_CONFIG_HOME/claude-code-router` 或 `~/.config/claude-code-router`  
-3. `~/AppData/Roaming/claude-code-router`  
-4. WSL：第一个存在 `config.sqlite` 的 `/mnt/c/Users/*/AppData/Roaming/claude-code-router`
-
-### 运行时读取的字段（不要提交进 Git）
-
-| 字段 | 来源 |
-| --- | --- |
-| Profile 列表 / enabled / 模型 | `config.sqlite` → `app_config.default.profile.profiles` |
-| 客户端密钥 | `api_keys` 中 `profile:<id>`，或 `bin/ccr-claude-code-api-key-<id>.cmd` |
-| 网关地址 | `routerEndpoint` / `gateway.host:port` |
-| 全局 settings 中的模型 | `$CLAUDE_CONFIG_DIR/settings.json`，或由路径推导的 `…/Users/<name>/.claude` |
-
-CCR 长模型名（如 `Provider/model[1m]`）会规范成上游短名（`model`）。
+| 选 profile | 只列 **已启用**、且有模型、有客户端密钥的 Claude Code Agent。上次选择会记住并排第一。 |
+| 选模型 | 菜单来自 profile 的 `availableModels`——就是 CCR 网关的准入清单，列出来的都一定能路由。显示短名，传下去的是完整 CCR 名。 |
+| 默认不打扰 | 只有一个选项、stdin 不是终端、转发参数里带 `-p`/`--print`、或设了 `CCR_NO_PICK=1` 时都不弹菜单。`--pick` / `--pick-model` 可强制。 |
+| 上下文窗口 | 依次问：供应商的 `/v1/models`（仅回环）、CCR 的 `modelMetadata`、每机 catalog。都没有就不设——猜错了压缩点会静默偏移。 |
+| 诊断输出 | 启动信息（profile / 模型 / 网关 / 窗口）走 **stderr**，只有 Claude 的回答走 **stdout**，所以 `2>/dev/null` 是安全的。 |
 
 ## 安全说明
 
-- 不要把 `ccr-profile-…` 密钥、上游 API Key 或本机绝对路径写进脚本。  
-- 密钥仅通过 `ANTHROPIC_AUTH_TOKEN` 传给子进程 `claude`。  
-- 状态输出只打印 profile id 与模型名，不打印密钥。  
-- 若某 profile 返回 401，请在 CCR 桌面端重新保存/启用该 Agent（或重启网关），不要把密钥贴进 Git。
+- 仓库不提交任何 token、上游 API Key 或本机绝对路径。每台机器运行时读自己的 CCR `config.sqlite` 与 profile 辅助脚本。
+- 密钥只通过 `ANTHROPIC_AUTH_TOKEN` 传给子进程 `claude`。
+- 状态输出只打印 profile id 和模型名，从不打印密钥。
+- 某个 profile 返回 401，就去 CCR 桌面端重新保存 / 启用那个 Agent，不要把密钥贴进 Git。
 
 ## 许可
 
