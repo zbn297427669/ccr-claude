@@ -19,6 +19,7 @@ Python inside them.
 from __future__ import annotations
 
 import ast
+import os
 import re
 import shutil
 import subprocess
@@ -57,7 +58,13 @@ def fail(name: str, detail: str) -> None:
 
 
 def check_bash_syntax() -> None:
-    """`bash -n` parses the whole script without running any of it."""
+    """`bash -n` parses the whole script without running any of it.
+
+    Fed on stdin rather than as a filename: on Windows, Git Bash does not turn a
+    `C:\\...` argument into a path (backslashes are escapes), and `bash -n` over
+    a path it cannot open exits 1 with a *silent* stderr -- which reads as a
+    syntax failure. Stdin sidesteps path translation entirely.
+    """
     if not SH.is_file():
         fail("bash syntax", f"{SH} is missing")
         return
@@ -65,10 +72,13 @@ def check_bash_syntax() -> None:
         skip("bash syntax", "no bash on PATH")
         return
     proc = subprocess.run(
-        ["bash", "-n", str(SH)], capture_output=True, text=True
+        ["bash", "-n", "-s"],
+        input=SH.read_bytes(),
+        capture_output=True,
     )
     if proc.returncode:
-        fail("bash syntax", proc.stderr or f"bash -n exited {proc.returncode}")
+        detail = proc.stderr.decode("utf-8", "replace").strip()
+        fail("bash syntax", detail or f"bash -n exited {proc.returncode} with no message")
     else:
         ok("bash syntax")
 
@@ -138,11 +148,16 @@ def check_ps_syntax() -> None:
     if not targets:
         fail("powershell syntax", "no .ps1 files found")
         return
-    # Pass paths as arguments rather than interpolating them into the command
-    # line: repo paths can contain spaces and quotes.
+    # The paths go through the environment, not the command line. `-Command`
+    # appends any extra arguments to the command *text*: passing two paths
+    # produced `...; exit $bad D:\a\...` and a ParserError, measured in CI. A
+    # temp script file would work too, but this needs no cleanup.
+    env = dict(os.environ)
+    env["CCR_CHECK_FILES"] = os.pathsep.join(str(p) for p in targets)
     script = (
         "$bad = 0; "
-        "foreach ($f in $args) { "
+        "foreach ($f in $env:CCR_CHECK_FILES.Split([IO.Path]::PathSeparator)) { "
+        "  if (-not $f) { continue }; "
         "  $errs = $null; "
         "  $null = [System.Management.Automation.Language.Parser]::ParseFile("
         "$f, [ref]$null, [ref]$errs); "
@@ -155,10 +170,10 @@ def check_ps_syntax() -> None:
         "exit $bad"
     )
     proc = subprocess.run(
-        [exe, "-NoProfile", "-NonInteractive", "-Command", script]
-        + [str(p) for p in targets],
+        [exe, "-NoProfile", "-NonInteractive", "-Command", script],
         capture_output=True,
         text=True,
+        env=env,
     )
     if proc.returncode:
         fail("powershell syntax", proc.stdout or proc.stderr)
