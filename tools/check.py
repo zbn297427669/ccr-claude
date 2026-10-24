@@ -57,6 +57,43 @@ def fail(name: str, detail: str) -> None:
         print(f"       {line}")
 
 
+def find_real_bash() -> str | None:
+    """A bash that actually runs, not Windows' WSL stub.
+
+    Windows ships `C:\\Windows\\System32\\bash.exe`, which launches a WSL
+    distribution. With no distribution registered it exits non-zero for *any*
+    input and says nothing -- so `bash -n` reports every script as broken. It
+    also sorts ahead of Git Bash on PATH. Probe with a trivial script first, and
+    try every candidate rather than only the first one `which` returns.
+    """
+    seen = set()
+    for exe in ("bash", "bash.exe"):
+        for candidate in (
+            shutil.which(exe),
+            # Git for Windows' real bash, which is what a dev box has.
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+        ):
+            if not candidate or not os.path.isfile(candidate):
+                continue
+            key = os.path.normcase(os.path.abspath(candidate))
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                probe = subprocess.run(
+                    [candidate, "-c", "echo $$"],
+                    capture_output=True,
+                    timeout=10,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if probe.returncode == 0 and probe.stdout.strip():
+                return candidate
+    return None
+
+
 def check_bash_syntax() -> None:
     """`bash -n` parses the whole script without running any of it.
 
@@ -68,17 +105,18 @@ def check_bash_syntax() -> None:
     if not SH.is_file():
         fail("bash syntax", f"{SH} is missing")
         return
-    if not shutil.which("bash"):
-        skip("bash syntax", "no bash on PATH")
+    bash = find_real_bash()
+    if not bash:
+        skip("bash syntax", "no working bash found")
         return
     proc = subprocess.run(
-        ["bash", "-n", "-s"],
+        [bash, "-n", "-s"],
         input=SH.read_bytes(),
         capture_output=True,
     )
     if proc.returncode:
         detail = proc.stderr.decode("utf-8", "replace").strip()
-        fail("bash syntax", detail or f"bash -n exited {proc.returncode} with no message")
+        fail("bash syntax", detail or f"{bash} -n exited {proc.returncode} with no message")
     else:
         ok("bash syntax")
 
