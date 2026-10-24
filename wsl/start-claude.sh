@@ -541,32 +541,41 @@ PY
 # Sources, best first:
 #   1. the provider's own /v1/models, when it is a loopback endpoint we can reach
 #   2. the provider's stored modelMetadata.contextWindow (CCR's last probe)
-#   3. CCR's per-install model catalog (~/.codex/ccr-model-catalog.json)
+#   3. CCR's shipped catalog (models.json), then the per-install catalog under
+#      ~/.codex -- but only when the entries agree, and only when the value is
+#      not CCR's own 128000 placeholder for "no metadata"
 # Nothing found: stay silent and set nothing. Leaving it unset is better than
-# guessing -- a wrong value is a silent compaction at the wrong point.
+# guessing -- a wrong value is a silent compaction at the wrong point. Source 3
+# is the one that broke this rule: its file stores a default, not a reading.
 #
 # Override with CCR_CONTEXT_WINDOW=<tokens>, or disable with
 # CCR_CONTEXT_WINDOW=off.
-resolve_context_window() {
-  local model="$1"
+#
+# Takes many models and prints `model<TAB>tokens` for each one that resolves,
+# because the picker wants the whole menu at once. One call opens config.sqlite
+# and the catalogs once and probes a loopback provider once, however many models
+# ask about it; doing this per menu line would re-read the same files a dozen
+# times. Resolving one model is a list of one.
+resolve_context_windows() {
+  [[ $# -gt 0 ]] || return 0
+  local m
   [[ "${CCR_CONTEXT_WINDOW:-}" == "off" ]] && return 0
   if [[ "${CCR_CONTEXT_WINDOW:-}" =~ ^[0-9]+$ ]]; then
-    printf '%s' "$CCR_CONTEXT_WINDOW"
+    # A forced value applies to every model, which is what the menu should show.
+    for m in "$@"; do
+      printf '%s\t%s\n' "$m" "$CCR_CONTEXT_WINDOW"
+    done
     return 0
   fi
 
-  python3 - "$CCR_DIR" "$model" <<'PY' 2>/dev/null || true
+  python3 - "$CCR_DIR" "$@" <<'PY' 2>/dev/null || true
 import json, re, shutil, sqlite3, sys, tempfile, urllib.request
 from pathlib import Path
 
 ccr = Path(sys.argv[1])
-model = (sys.argv[2] or "").strip()
-if not model:
+raws = [a.strip() for a in sys.argv[2:] if (a or "").strip()]
+if not raws:
     sys.exit(0)
-
-provider_name, _, model_part = model.partition("/")
-if not model_part:
-    provider_name, model_part = "", model
 
 
 def open_db():
@@ -586,16 +595,45 @@ def to_int(v):
     return n if 0 < n <= 10_000_000 else None
 
 
-ctx = None
-base = ""
-api_key = ""
+# The window CCR invents for a model it has no metadata for. Verified in its
+# bundle (`var VX="Fusion",KFe=128e3,zFe=95`), and it reproduces all 14 entries
+# of a real per-install catalog. A value equal to this in that file carries no
+# information: it is what "unknown" looks like.
+CCR_PLACEHOLDER_WINDOW = 128000
 
+
+def split_name(name):
+    provider, _, part = name.partition("/")
+    if not part:
+        provider, part = "", name
+    return provider, part
+
+
+def window_of(entry):
+    """Every shape a window shows up in, in one place.
+
+    Flat fields are what an endpoint returns. `limits` is what CCR's shipped
+    catalog uses -- and that catalog had been read with the flat-field loop
+    alone, so this branch never matched a single entry.
+    """
+    for f in ("context_window", "contextWindow", "max_context_window",
+              "max_model_len"):
+        v = to_int(entry.get(f))
+        if v:
+            return v
+    lim = entry.get("limits")
+    if isinstance(lim, dict):
+        return to_int(lim.get("contextTokens")) or to_int(lim.get("inputTokens"))
+    return None
+
+
+# ---- provider metadata, read once for the whole list -----------------------
+
+providers = {}     # CCR provider name -> {base, key, meta}
 try:
     con, td = open_db()
 except Exception:
     con, td = None, None
-
-meta_names = {}   # every name the provider's metadata knows this model by
 try:
     if con is not None:
         row = con.execute(
@@ -603,19 +641,13 @@ try:
         ).fetchone()
         cfg = json.loads(row[0]) if row else {}
         for p in cfg.get("Providers") or []:
-            names = {p.get("name"), p.get("id")} - {None, ""}
-            if provider_name not in names:
-                continue
-            base = (p.get("api_base_url") or p.get("baseUrl") or "").rstrip("/")
-            api_key = p.get("api_key") or ""
-            meta = p.get("modelMetadata") or {}
-            meta_names = {"__all__": list(meta.keys())}
-            for key in (model_part, model):
-                m = meta.get(key) or {}
-                ctx = to_int(m.get("contextWindow") or m.get("context_window"))
-                if ctx:
-                    break
-            break
+            entry = {
+                "base": (p.get("api_base_url") or p.get("baseUrl") or "").rstrip("/"),
+                "key": p.get("api_key") or "",
+                "meta": p.get("modelMetadata") or {},
+            }
+            for n in {p.get("name"), p.get("id")} - {None, ""}:
+                providers[n] = entry
 finally:
     if con is not None:
         try:
@@ -624,84 +656,187 @@ finally:
             shutil.rmtree(td, ignore_errors=True)
 
 
-def probe(url, key, wanted):
-    req = urllib.request.Request(url)
-    if key:
-        req.add_header("authorization", "Bearer " + key)
-        req.add_header("x-api-key", key)
-    with urllib.request.urlopen(req, timeout=1.5) as r:
-        data = json.loads(r.read().decode("utf-8", "replace"))
-    entries = data.get("data") or data.get("models") or []
-    # Exact match first. A local endpoint often serves one model under the id
-    # it was built with, which need not be the name CCR or the profile uses
-    # (here: CCR says bonsai-v3, the artifact answers as bonsai-heretic). A
-    # single-model endpoint is unambiguous, so accept it -- but only when the
-    # profile names that same provider, or a cloud model would inherit the
-    # local window.
-    for m in entries:
-        ids = {m.get("id"), (m.get("id") or "").split("/")[-1]}
-        if wanted & ids:
-            for f in ("context_window", "contextWindow", "max_context_window",
-                      "max_model_len"):
-                v = to_int(m.get(f))
+# ---- catalogs, loaded at most once ----------------------------------------
+
+catalogs = []      # [(label, data)]
+
+
+def catalog_data():
+    if catalogs:
+        return catalogs
+    paths = [("models.json", ccr / "models.json")]
+    if re.match(r"^/mnt/[a-z]/", str(ccr)):
+        # .../AppData/Roaming/claude-code-router -> .../.codex/ccr-model-catalog.json
+        paths.append(("catalog", ccr.parents[2] / ".codex" / "ccr-model-catalog.json"))
+    else:
+        paths.append(("catalog", Path.home() / ".codex" / "ccr-model-catalog.json"))
+    for label, path in paths:
+        if not path.is_file():
+            continue
+        try:
+            catalogs.append((label, json.loads(path.read_text(encoding="utf-8"))))
+        except Exception:
+            pass
+    return catalogs
+
+
+probed = {}        # provider base -> {model id: window, "__single__": window}
+
+
+def probed_windows(base, key):
+    """Every window the provider advertises, keyed by each id it answers to.
+
+    One map per provider, because a menu asks about a dozen models behind the
+    same endpoint and each request costs a round trip (and, for a local engine,
+    a cold start).
+
+    A local endpoint often serves one model under the id it was built with,
+    which need not be the name CCR or the profile uses (here: CCR says
+    bonsai-v3, the artifact answers as bonsai-heretic). A single-model endpoint
+    is unambiguous, so its window is also filed under "__single__" -- the
+    caller uses that only for models whose provider is this same endpoint, so a
+    cloud model never inherits a local window.
+    """
+    if base not in probed:
+        found = {}
+        for suffix in ("/models", "/v1/models"):
+            try:
+                req = urllib.request.Request(base + suffix)
+                if key:
+                    req.add_header("authorization", "Bearer " + key)
+                    req.add_header("x-api-key", key)
+                with urllib.request.urlopen(req, timeout=1.5) as r:
+                    data = json.loads(r.read().decode("utf-8", "replace"))
+            except Exception as exc:
+                # A timeout means something is listening but not answering --
+                # an engine that is cold or mid-load. The second path is the
+                # same server, so it would time out too; only a refusal or a
+                # 404 (answered instantly) is worth a second try. Without this
+                # a dead local engine stalls the menu for 3s instead of 1.5s.
+                if isinstance(exc, TimeoutError) or "timed out" in str(exc):
+                    break
+                continue
+            entries = data.get("data") or data.get("models") or []
+            for m in entries:
+                v = window_of(m)
+                if not v:
+                    continue
+                for k in {m.get("id"), (m.get("id") or "").split("/")[-1]} - {None, ""}:
+                    found.setdefault(k, v)
+            if len(entries) == 1 and found:
+                found["__single__"] = next(iter(found.values()))
+            if found:
+                break
+        probed[base] = found
+    return probed[base]
+
+
+def resolve(name):
+    provider, part = split_name(name)
+    p = providers.get(provider) or {}
+    meta = p.get("meta") or {}
+    # Only this model's own names. The provider's other models are not
+    # candidates: an earlier version also matched every name in its metadata,
+    # which made `deepseek-v4.1-flash` inherit whatever its neighbours in
+    # models.json happened to declare.
+    wanted = {part, name}
+
+    # 2. CCR's own last probe, stored on the provider
+    for key in (part, name):
+        v = to_int((meta.get(key) or {}).get("contextWindow")
+                   or (meta.get(key) or {}).get("context_window"))
+        if v:
+            return v
+
+    # 1. the endpoint itself, when it is on this machine
+    base = p.get("base") or ""
+    if re.match(r"^https?://(127\.|localhost|\[::1\])", base):
+        found = probed_windows(base, p.get("key") or "")
+        for k in wanted:
+            if k in found:
+                return found[k]
+        if "__single__" in found:
+            return found["__single__"]
+
+    # 3. Catalogs. `models.json` first: it ships with CCR and is built from
+    #    provider metadata, so a value there is a reading. The per-install
+    #    catalog under .codex is generated for Codex and fills in a hard-coded
+    #    128000 whenever a model has no provider metadata -- a guess (see below).
+    for label, data in catalog_data():
+        # One model name can map to several entries -- `deepseek/deepseek-v4.1-flash`
+        # says 1050000, `alibaba/...` says 1000000, and both list the same model
+        # name. Taking whichever came first would be a coin flip, so require
+        # them to agree. "Agree" means within 10%: a 5% spread is the same model
+        # seen by two providers, and the smaller number is the safe one (it can
+        # only compact early, never late). A wider spread means the name really
+        # does mean two different things, and then this file knows nothing.
+        vals = set()
+        for m in data.get("models") or []:
+            if wanted & {m.get("id"), m.get("slug"), m.get("model")}:
+                v = window_of(m)
                 if v:
-                    return v
-    if len(entries) == 1:
-        m = entries[0]
-        for f in ("context_window", "contextWindow", "max_context_window",
-                  "max_model_len"):
-            v = to_int(m.get(f))
-            if v:
-                return v
+                    vals.add(v)
+        if not vals:
+            continue
+        v = min(vals)
+        if max(vals) - v > v * 0.1:
+            continue
+        # CCR writes 128000 for any model it has no metadata for (KFe in its
+        # bundle: `function p1e(e,t=jt(e)){return si(t)||KFe}`). That is its
+        # default, not a probe, so it cannot be told apart from "CCR does not
+        # know" -- and treating it as a reading is what silently pulled an
+        # explicitly configured 800000 down to 128000 here.
+        if label == "catalog" and v == CCR_PLACEHOLDER_WINDOW:
+            continue
+        return v
     return None
 
 
-# The endpoint answers for its provider, so match against both the model name
-# CCR uses and the names its metadata lists for the same provider.
-wanted = {model_part, model}
-wanted |= set((meta_names or {}).get("__all__", []))
-
-# 1. the endpoint itself, when it is on this machine
-if ctx is None and re.match(r"^https?://(127\.|localhost|\[::1\])", base):
-    for suffix in ("/models", "/v1/models"):
-        try:
-            ctx = probe(base + suffix, api_key, wanted)
-        except Exception:
-            ctx = None
-        if ctx:
-            break
-
-# 3. CCR's per-install catalog. It lives beside .codex under the Windows user
-#    profile when CCR runs on Windows and this script runs in WSL.
-if ctx is None:
-    cats = [Path.home() / ".codex" / "ccr-model-catalog.json", ccr / "models.json"]
-    if re.match(r"^/mnt/[a-z]/", str(ccr)):
-        # .../AppData/Roaming/claude-code-router -> .../.codex/ccr-model-catalog.json
-        cats.insert(0, ccr.parents[2] / ".codex" / "ccr-model-catalog.json")
-    for cat in cats:
-        if not cat.is_file():
-            continue
-        try:
-            data = json.loads(cat.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        for m in data.get("models") or []:
-            ids = {m.get("id"), m.get("slug"), m.get("model")}
-            if wanted & ids:
-                for f in ("context_window", "contextWindow",
-                          "max_context_window", "max_model_len"):
-                    v = to_int(m.get(f))
-                    if v:
-                        ctx = v
-                        break
-            if ctx:
-                break
-        if ctx:
-            break
-
-if ctx:
-    print(ctx)
+# The caller passes the names exactly as the menu shows them and gets them back
+# the same way, tab-separated from the window, so a name containing a slash or
+# a [1m] marker still lines up with its row. Repeated spellings of the same
+# model resolve once and are all printed, because the menu may list both.
+cache = {}
+for raw in raws:
+    n = (raw or "").split("[", 1)[0].strip()
+    if not n:
+        continue
+    if n not in cache:
+        cache[n] = resolve(n)
+    if cache[n]:
+        print(f"{raw}\t{cache[n]}")
 PY
+}
+
+# One model's window, for the launch-time export. Wraps the list version so the
+# two can never disagree about where a number came from.
+resolve_context_window() {
+  local out
+  out="$(resolve_context_windows "$1" 2>/dev/null || true)"
+  [[ -n "$out" ]] || return 0
+  printf '%s' "${out#*$'\t'}"
+}
+
+# A window as a menu label.
+#
+# One decimal of M above a million, which is exactly a 100K step: enough to
+# tell 1.0M from 1.1M, and that is the whole job of the column. Below a million
+# it stays in K, because rounding 128K to "100K" would cost 28% -- there a plain
+# "128K" is both more honest and shorter. A "~" marks a value that was rounded.
+fmt_window() {
+  local n="${1:-}" m k approx
+  [[ "$n" =~ ^[0-9]+$ ]] || return 0
+  if (( n >= 1000000 )); then
+    m=$(( (n + 50000) / 100000 ))
+    approx=""
+    if (( m * 100000 != n )); then approx="~"; fi
+    printf '%s%d.%dM' "$approx" "$(( m / 10 ))" "$(( m % 10 ))"
+  else
+    k=$(( (n + 500) / 1000 ))
+    approx=""
+    if (( k * 1000 != n )); then approx="~"; fi
+    printf '%s%dK' "$approx" "$k"
+  fi
 }
 
 resolve_profile_id() {
@@ -801,13 +936,24 @@ pick_profile() {
 # The list comes from the profile's availableModels, which is also what CCR's
 # gateway enforces -- so anything offered here is something the gateway will
 # accept. The current model is first, so pressing Enter keeps today's behaviour.
+#
+# Each row carries the model's own context window, because the choice is
+# otherwise made blind: two models 4x apart in context look identical in a list
+# of names. The number is resolved once for the whole menu, in one Python
+# process, rather than once per row.
+#
+# It is the model's window, not necessarily where compaction fires: when
+# settings.json pins a lower autoCompactWindow for that model, Claude Code takes
+# min(window, pin) at runtime. The pin is not applied here, because the same
+# resolver feeds CLAUDE_CODE_MAX_CONTEXT_TOKENS, which must stay a statement
+# about the model.
 pick_model() {
   local pid="$1" force="${2:-0}"
   # Declared non-empty: `set -u` treats an unset array as an error even when
   # the reference is guarded by a count check, because the count itself was
   # read from an unset variable.
-  local -a longs=() shorts=()
-  local long short_line i choice default_idx=1 mark
+  local -a longs=() shorts=() windows=()
+  local long short_line i choice default_idx=1 mark win_label
 
   while IFS=$'\t' read -r long short_line _; do
     [[ -z "$long" ]] && continue
@@ -832,12 +978,20 @@ pick_model() {
     done
   fi
 
+  local -A win_of=()
+  while IFS=$'\t' read -r long win_label; do
+    [[ -n "$long" ]] || continue
+    win_of["$long"]="$win_label"
+  done < <(resolve_context_windows "${longs[@]}" || true)
+
   {
-    echo "Models this profile allows — pick one:"
+    echo "Models this profile allows — pick one (context window in brackets):"
     for i in "${!longs[@]}"; do
       mark=""
       ((i == 0)) && mark="  (current)"
-      printf "  %d) %s%s\n" "$((i + 1))" "${shorts[i]}" "$mark"
+      win_label="$(fmt_window "${win_of["${longs[i]}"]:-}")"
+      [[ -n "$win_label" ]] || win_label="unknown"
+      printf "  %d) %s  [%s]%s\n" "$((i + 1))" "${shorts[i]}" "$win_label" "$mark"
     done
     echo "  0) cancel"
   } >&2
@@ -910,6 +1064,7 @@ Usage:
   ccr-claude --profile <id|name>  # select by id / name substring (errors if ambiguous)
   ccr-claude --list-profiles
   ccr-claude --model <short-or-long-name>
+  ccr-claude --context-window <tokens|off>
   MODEL=<name> ccr-claude
 
 Environment:
@@ -919,7 +1074,14 @@ Environment:
   CCR_PROFILE         Same as --profile
   CCR_NO_PICK=1       Never prompt; prefer last used, else most recently modified
   CCR_SKIP_CHECK=1    Skip gateway / token preflight
+  CCR_CONTEXT_WINDOW  Same as --context-window
   MODEL               Temporary model override
+
+Context window:
+  By default the window comes from the provider's own metadata, a loopback
+  endpoint's /models, or CCR's catalogs -- see CONTEXT-WINDOW.md. The menu
+  shows the resolved value per model. --context-window overrides all of it;
+  "off" means set nothing and let Claude Code decide.
 
 Last selected profile is stored in:
   ${XDG_CONFIG_HOME:-~/.config}/ccr-claude/last-profile
@@ -974,6 +1136,17 @@ while [[ $# -gt 0 ]]; do
     --pick) FORCE_PICK=1; shift ;;
     --pick-model) FORCE_PICK_MODEL=1; shift ;;
     --skip-check) SKIP_CHECK=1; shift ;;
+    # Consumed here rather than passed through: `claude` has no such flag, and
+    # the value is exported as CLAUDE_CODE_MAX_CONTEXT_TOKENS lower down.
+    --context-window)
+      CCR_CONTEXT_WINDOW="${2:-}"
+      [[ -n "$CCR_CONTEXT_WINDOW" ]] || { echo "missing --context-window value" >&2; exit 1; }
+      shift 2
+      ;;
+    --context-window=*)
+      CCR_CONTEXT_WINDOW="${1#--context-window=}"
+      shift
+      ;;
     --profile)
       PROFILE_WANT="${2:-}"
       [[ -n "$PROFILE_WANT" ]] || { echo "missing --profile value" >&2; exit 1; }
@@ -1104,11 +1277,14 @@ export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=0
 # import above, so a value CCR wrote is still honoured if the model cannot be
 # resolved; and it may lower a value from modelSettings, which is what makes it
 # worth setting even when /autocompact once left a stale 800000 behind.
-CTX_WINDOW="$(resolve_context_window "$RAW_MODEL" || true)"
-CTX_SOURCE=""
+#
+# CCR_CONTEXT_WINDOW="off" means "set nothing": the resolver stays silent and
+# Claude Code uses its own chain (catalog, then modelSettings, then 200000).
+# A number is used verbatim, including when the catalogs disagree with it.
+CTX_WINDOW=''
+[[ "${CCR_CONTEXT_WINDOW:-}" == "off" ]] || CTX_WINDOW="$(resolve_context_window "$RAW_MODEL" || true)"
 if [[ -n "${CTX_WINDOW:-}" ]]; then
   export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$CTX_WINDOW"
-  CTX_SOURCE="$CTX_WINDOW"
 fi
 
 # Whether Claude Code can talk to this model at all. Probed before launch so the
@@ -1179,10 +1355,17 @@ maybe_update_model_pricing
     echo "Claude model: $DEFAULT_MODEL  ← $RAW_MODEL  (from $MODEL_SOURCE)"
   fi
   echo "CCR: $ANTHROPIC_BASE_URL"
-  if [[ -n "$CTX_SOURCE" ]]; then
-    echo "Context window: $CTX_SOURCE tokens"
+  # Said plainly, because "unresolved" used to claim a 200000 that was no longer
+  # true: when this script sets nothing, Claude Code still applies whatever
+  # autoCompactWindow says in settings.json, and only falls back to 200000 after
+  # that. A value here is one this script exported and nothing can raise.
+  if [[ -n "${CTX_WINDOW:-}" ]]; then
+    echo "Context window: $CTX_WINDOW tokens"
+  elif [[ "${CCR_CONTEXT_WINDOW:-}" == "off" ]]; then
+    echo "Context window: not set (--context-window off; Claude Code decides)"
   else
-    echo "Context window: unresolved, Claude Code will assume 200000"
+    echo "Context window: unresolved here; Claude Code falls back to"
+    echo "                autoCompactWindow in settings.json, else 200000"
   fi
   case "${DEFER_CAP:-}" in
     no-defer)

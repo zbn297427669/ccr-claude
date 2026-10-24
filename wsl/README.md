@@ -49,10 +49,11 @@ ccr-claude --list-profiles
 ccr-claude --profile <id-or-name-substring>
 ccr-claude --pick-model    # force the model menu
 ccr-claude --model <name>
+ccr-claude --context-window <tokens|off>
 ccr-claude --skip-check    # skip gateway / token preflight
 ```
 
-The model menu comes from the profile’s `availableModels`, which is also the gateway's allow-list, so anything it offers will route. It prints short names (the part after `/`, without `[1m]`) and passes the full CCR name to Claude Code. It is skipped silently when the profile allows a single model, when stdin is not a terminal, when `-p`/`--print` is among the forwarded arguments, or when `CCR_NO_PICK=1` — a prompt inside a script is a hang. `--pick-model` overrides all four.
+The model menu comes from the profile’s `availableModels`, which is also the gateway's allow-list, so anything it offers will route. It prints short names (the part after `/`, without `[1m]`) and passes the full CCR name to Claude Code. Each row also carries the model's context window (`1.0M`, `128K`, or the word `unknown` when nothing resolves), resolved once for the whole menu. That is the model's window, not necessarily where compaction fires: when `settings.json` pins a lower `autoCompactWindow` for it, the runtime takes the smaller of the two. The menu is skipped silently when the profile allows a single model, when stdin is not a terminal, when `-p`/`--print` is among the forwarded arguments, or when `CCR_NO_PICK=1` — a prompt inside a script is a hang. `--pick-model` overrides all four.
 
 Before starting Claude Code, the script checks that the CCR gateway is reachable and that the selected profile’s client key can call `/v1/models`. The last chosen profile is remembered under `~/.config/ccr-claude/last-profile` and preferred next time.
 
@@ -68,7 +69,7 @@ The script also resolves the model’s real context window and passes it to Clau
 | `CCR_PROFILE` / `--profile` | Select agent (errors if the substring matches more than one) |
 | `CCR_NO_PICK=1` | Skip both menus (profile and model); prefer last used, else newest |
 | `CCR_SKIP_CHECK=1` | Skip gateway / token preflight |
-| `CCR_CONTEXT_WINDOW` | Override the resolved context window (token count); `off` disables resolution |
+| `CCR_CONTEXT_WINDOW` / `--context-window` | Override the resolved context window (token count); `off` sets nothing and leaves it to Claude Code |
 | `CCR_CAPABILITY_CHECK` | `off` disables the pre-launch probe for `defer_loading` support |
 | `MODEL` / `--model` | Temporary model override |
 

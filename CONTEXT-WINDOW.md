@@ -249,21 +249,33 @@ set CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000
 启动前解析出当前模型的真实窗口，通过 `CLAUDE_CODE_MAX_CONTEXT_TOKENS`
 传进去（实测它能 clamp 掉 `modelSettings` 里的陈旧值）。
 
-解析顺序：
+解析顺序（只有这个模型**自己**的名字算候选；供应商里别的模型的元数据不算，
+否则邻居在 `models.json` 里的读数会被继承过来）：
 
-1. **供应商的 `/v1/models`** —— 仅当它是本机回环地址。单模型端点直接采信
+1. **CCR 存储的 `modelMetadata.contextWindow`** —— CCR 上次探测的结果
+2. **供应商的 `/v1/models`** —— 仅当它是本机回环地址。单模型端点直接采信
    （本地引擎常见：CCR 里叫 `bonsai-v3`，实际答 `bonsai-heretic`）
-2. **CCR 存储的 `modelMetadata.contextWindow`** —— CCR 上次探测的结果
-3. **CCR 的每机 catalog** —— `~/.codex/ccr-model-catalog.json`
-4. **都没有 → 不设任何值**，让 Claude Code 用默认值，并在启动信息里说明
+3. **CCR 自带的总 catalog** `models.json`，读 `limits.contextTokens`
+   （`limits.inputTokens` 兜底）。同名对上多条时要求一致：差 10% 以内算同一个
+   模型、取小值（只会提前压缩，不会滞后）；差更多说明这名字真是两个东西，
+   那份文件就什么也没说
+4. **每机 catalog** `~/.codex/ccr-model-catalog.json`。它给没有元数据的模型一律
+   写 128000（CCR bundle 里的 `KFe=128e3`）——那是默认值不是读数，所以这一档的
+   128000 直接跳过
+5. **都没有 → 不设任何值**，让 Claude Code 走自己的链条
+   （目录 → `settings.json` 的 `autoCompactWindow` → 200000），并在启动信息里说明
 
 宁可留空也不猜：值猜错了，压缩会在错误的位置静默发生。
+
+模型菜单里每行后面也带这一列（`1.0M` / `128K` / 解析不出时 `unknown`）。
+整张菜单一次解析完，不再逐行重读同一个库和目录。
 
 覆盖方式：
 
 ```bash
-CCR_CONTEXT_WINDOW=131072 ccr-claude   # 手动指定
-CCR_CONTEXT_WINDOW=off ccr-claude      # 关掉自动解析
+ccr-claude --context-window 131072     # 手动指定（WSL 与 Windows 写法一致）
+CCR_CONTEXT_WINDOW=131072 ccr-claude   # 同上，用环境变量
+ccr-claude --context-window off        # 关掉自动解析，什么都不设
 ```
 
 启动时会打印一行，例如：
@@ -271,6 +283,16 @@ CCR_CONTEXT_WINDOW=off ccr-claude      # 关掉自动解析
 ```
 Context window: 262144 tokens
 ```
+
+解析不到时说：
+
+```
+Context window: unresolved here; Claude Code falls back to
+                autoCompactWindow in settings.json, else 200000
+```
+
+早先这里写的是「Claude Code will assume 200000」，并不对：只有 `settings.json`
+也没钉值时才轮到 200000。
 
 ### 能力探测：这个模型 Claude Code 能用吗
 
@@ -356,11 +378,14 @@ context cache | 1 active + 1 cached device states | host 8 states | 8.00 GiB KV
   `/v1/models` 列出 `XM/ninfer-local`，或者让网关给出的 id 带上窗口信息。
 - **云端模型的 128000 未必是真的。** CCR 的 per-install catalog 里
   `OD/deepseek-v4.1-flash` 标 128000，但 CCR 自带的总 catalog
-  （`models.json`，5092 条）里 `deepseek/deepseek-v4-1-flash` 标 1048576。
-  两者矛盾，本机探测不到云端真实值，只能信 catalog。值得下次核对。
-- **`Go/qwen3.8-max` 标 1048576，但受 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 全局钳制**
-  （2.1.310 上无 800000 硬顶，但用户 `settings.json` 若写 128000，它也一样被压到
-  108000）。要用满必须显式给 MAX。
+  （`models.json`）里同名条目标的是一百万量级。启动器现在按上面第五节的顺序
+  解析，并且把 per-install catalog 里的 128000 当占位符跳过，这就是为什么
+  `OD/deepseek-v4.1-flash` 解析出的是 1000000 而不是 128000。
+- **`Go/qwen3.8-max` 标 1048576（`models.json`），实际压缩点是 `min(窗口, 钉值)`。**
+  2.1.310 上没有 800000 硬顶，但用户 `settings.json` 的
+  `modelSettings.settings.autoCompactWindow` 若钉了更低的值，运行时会取小。
+  要用满必须显式给 MAX（`--context-window 1048576`），它同样会被
+  `Math.min` 与钉值取小。
 
 ---
 

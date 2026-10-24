@@ -49,10 +49,11 @@ ccr-claude --list-profiles
 ccr-claude --profile <id-或-名称片段>
 ccr-claude --pick-model    # 强制弹模型菜单
 ccr-claude --model <名称>
+ccr-claude --context-window <token 数|off>
 ccr-claude --skip-check    # 跳过网关 / token 预检
 ```
 
-模型菜单来自 profile 的 `availableModels`，它同时就是网关的准入清单——菜单里列出来的都能路由。显示短名（`/` 之后、去掉 `[1m]`），传给 Claude Code 的是完整 CCR 名。四种情况静默跳过：profile 只允许一个模型、stdin 不是终端、转发参数里有 `-p`/`--print`、`CCR_NO_PICK=1`——脚本调用时弹提示就是挂住。`--pick-model` 可以越过这四条。
+模型菜单来自 profile 的 `availableModels`，它同时就是网关的准入清单——菜单里列出来的都能路由。显示短名（`/` 之后、去掉 `[1m]`），传给 Claude Code 的是完整 CCR 名。每行后面带这个模型的上下文窗口（`1.0M`、`128K`，解析不出时显示 `unknown`），整张菜单一次解析完；它是模型窗口，未必等于压缩点——`settings.json` 给某个模型钉了更低的 `autoCompactWindow` 时运行时会取 `min`。四种情况静默跳过：profile 只允许一个模型、stdin 不是终端、转发参数里有 `-p`/`--print`、`CCR_NO_PICK=1`——脚本调用时弹提示就是挂住。`--pick-model` 可以越过这四条。
 
 启动前会检查 CCR 网关是否可达，以及所选 profile 的客户端密钥能否访问 `/v1/models`。上次选择的 profile 会记在 `~/.config/ccr-claude/last-profile`，下次优先使用。
 
@@ -68,7 +69,7 @@ ccr-claude --skip-check    # 跳过网关 / token 预检
 | `CCR_PROFILE` / `--profile` | 指定 Agent（名称片段匹配多个时会报错列出） |
 | `CCR_NO_PICK=1` | 两个菜单都不弹（profile 与模型）；优先上次选择，否则最近修改 |
 | `CCR_SKIP_CHECK=1` | 跳过网关 / token 预检 |
-| `CCR_CONTEXT_WINDOW` | 覆盖自动解析到的窗口值（token 数）；`off` 关闭自动解析 |
+| `CCR_CONTEXT_WINDOW` / `--context-window` | 覆盖自动解析到的窗口值（token 数）；`off` 表示什么都不设，交给 Claude Code 决定 |
 | `CCR_CAPABILITY_CHECK` | `off` 关闭启动前的能力探测（探测模型是否接受 Claude Code 请求的 `defer_loading`） |
 | `MODEL` / `--model` | 临时覆盖模型 |
 

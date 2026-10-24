@@ -19,7 +19,9 @@
   覆盖模型名（支持 CCR 长名，会转成短名传给 ANTHROPIC_MODEL）。
 
 .PARAMETER ContextWindow
-  设定 CLAUDE_CODE_MAX_CONTEXT_TOKENS。不传就不设，沿用 settings.json。
+  设定 CLAUDE_CODE_MAX_CONTEXT_TOKENS。传 off 就什么都不设，让 Claude Code
+  自己决定（目录 → settings.json 的 autoCompactWindow → 200000）。不传则
+  由启动器解析，见 CONTEXT-WINDOW.md。
   Claude Code 实际用的是 MAX − 20000（预留输出），不再有 800000 硬顶。
 
 .PARAMETER ListProfiles
@@ -52,7 +54,9 @@ $ErrorActionPreference = 'Stop'
 
 $ProfileId = $env:CCR_PROFILE
 $ModelName = ''
-$ContextWindow = 0
+# 字符串而不是 [int]：--context-window off 也得能传，它表示"什么都别设"。
+$ContextWindow = ''
+$ContextWindowOff = $false
 $ListProfiles = $false
 $Pick = $false
 $PickModel = $false
@@ -65,7 +69,13 @@ while ($i -lt $args.Count) {
     switch -Regex ($a) {
         '^--(profile|profile-id)$' { $ProfileId = [string]$args[++$i]; break }
         '^--model$' { $ModelName = [string]$args[++$i]; break }
-        '^--context-window$' { $ContextWindow = [int]$args[++$i]; break }
+        '^--context-window$' {
+            $ContextWindow = [string]$args[++$i]
+            # 这里还不能用 Stop-With：函数定义在参数循环之后才执行到。
+            if (-not $ContextWindow) { [Console]::Error.WriteLine("ccr-claude: missing --context-window value"); exit 1 }
+            break
+        }
+        '^--context-window=(.*)$' { $ContextWindow = $Matches[1]; break }
         '^--list-profiles$' { $ListProfiles = $true; break }
         '^--pick$' { $Pick = $true; break }
         '^--pick-model$' { $PickModel = $true; break }
@@ -92,6 +102,24 @@ function ConvertTo-ShortModel([string]$M) {
     $i = $M.IndexOf('[')
     if ($i -ge 0) { $M = $M.Substring(0, $i) }
     return $M
+}
+
+# 窗口在菜单里写成什么。
+#
+# 百万以上给一位小数的 M —— 正好是 100K 一步，够分清 1.0M 和 1.1M，
+# 这一列要干的就这件事。百万以下留在 K：把 128K 舍成 "100K" 会凭空差 28%，
+# 而 "128K" 既准又短。四舍五入过的值前面加 "~"。
+function Format-WindowLabel([string]$N) {
+    if ($N -notmatch '^\d+$') { return '' }
+    $n = [long]$N
+    if ($n -ge 1000000) {
+        $m = [long][Math]::Round($n / 100000.0, 0, [MidpointRounding]::AwayFromZero)
+        $approx = if ($m * 100000 -ne $n) { '~' } else { '' }
+        return ('{0}{1}.{2}M' -f $approx, [Math]::Floor($m / 10), ($m % 10))
+    }
+    $k = [long][Math]::Round($n / 1000.0, 0, [MidpointRounding]::AwayFromZero)
+    $approx = if ($k * 1000 -ne $n) { '~' } else { '' }
+    return ('{0}{1}K' -f $approx, $k)
 }
 
 # Claude Code 的网关缓存把模型名编码成 anthropic/claude-ccr-h<hex>，其中
@@ -220,17 +248,14 @@ try:
         # Claude Code 与 CCR 之间没有传递窗口的通道，所以由启动器问出来。
         # 来源依次：供应商 /v1/models（仅回环）、CCR 存的 modelMetadata、
         # 每机 catalog。都没有就什么都不输出 —— 留空好过猜。
+        #
+        # 一次问一串，因为菜单有十几个模型：逐个调用会把同一个库、同一份目录
+        # 读十几遍，还会对同一个回环端点反复探测（本地引擎每次都要付冷启动）。
         import urllib.request
 
-        model = (sys.argv[3] or "").strip()
-        if not model:
+        raws = [a.strip() for a in sys.argv[3:] if (a or "").strip()]
+        if not raws:
             raise SystemExit(0)
-        # [1m] 是 Claude Code 的窗口标注，目录和 modelMetadata 里都不带它。
-        base_name = model.split("[", 1)[0].strip()
-        prov, _, part = base_name.partition("/")
-        if not part:
-            prov, part = "", base_name
-        model = base_name
 
         def to_int(v):
             try:
@@ -239,80 +264,145 @@ try:
                 return None
             return n if 0 < n <= 10_000_000 else None
 
-        base, key, ctx, meta_names = "", "", None, []
-        for p in cfg.get("Providers") or []:
-            if prov not in ({p.get("name"), p.get("id")} - {None, ""}):
-                continue
-            base = (p.get("api_base_url") or p.get("baseUrl") or "").rstrip("/")
-            key = p.get("api_key") or ""
-            meta = p.get("modelMetadata") or {}
-            meta_names = list(meta.keys())
-            for name in (part, model):
-                m = meta.get(name) or {}
-                ctx = to_int(m.get("contextWindow") or m.get("context_window"))
-                if ctx:
-                    break
-            break
-
-        def probe(url, wanted):
-            req = urllib.request.Request(url)
-            if key:
-                req.add_header("authorization", "Bearer " + key)
-                req.add_header("x-api-key", key)
-            with urllib.request.urlopen(req, timeout=1.5) as r:
-                data = json.loads(r.read().decode("utf-8", "replace"))
-            entries = data.get("data") or data.get("models") or []
-            fields = ("context_window", "contextWindow",
-                      "max_context_window", "max_model_len")
-            for m in entries:
-                ids = {m.get("id"), (m.get("id") or "").split("/")[-1]}
-                if wanted & ids:
-                    for f in fields:
-                        v = to_int(m.get(f))
-                        if v:
-                            return v
-            # 本地端点常常只挂一个模型，名字未必和 CCR 记的一致
-            if len(entries) == 1:
-                for f in fields:
-                    v = to_int(entries[0].get(f))
-                    if v:
-                        return v
+        def window_of(entry):
+            # 平面字段是端点返回的形状；limits 是 CCR 自带目录的形状 ——
+            # 以前只认平面字段，于是那个目录一条都没匹配上。
+            for f in ("context_window", "contextWindow",
+                      "max_context_window", "max_model_len"):
+                v = to_int(entry.get(f))
+                if v:
+                    return v
+            lim = entry.get("limits")
+            if isinstance(lim, dict):
+                return to_int(lim.get("contextTokens")) or to_int(lim.get("inputTokens"))
             return None
 
-        wanted = {part, model} | set(meta_names)
-        if ctx is None and re.match(r"^https?://(127\.|localhost|\[::1\])", base):
+        # CCR 对没有元数据的模型一律写 128000（bundle 里 KFe=128e3）。那是它的
+        # 默认值，不是探测结果，和"CCR 不知道"分不开，所以不能当读数。
+        PLACEHOLDER = 128000
+
+        providers = {}
+        for p in cfg.get("Providers") or []:
+            entry = {
+                "base": (p.get("api_base_url") or p.get("baseUrl") or "").rstrip("/"),
+                "key": p.get("api_key") or "",
+                "meta": p.get("modelMetadata") or {},
+            }
+            for n in {p.get("name"), p.get("id")} - {None, ""}:
+                providers[n] = entry
+
+        catalogs = []
+
+        def catalog_data():
+            if catalogs:
+                return catalogs
+            paths = [("models.json", ccr / "models.json"),
+                     ("catalog", ccr.parents[2] / ".codex" / "ccr-model-catalog.json")]
+            for label, path in paths:
+                if not path.is_file():
+                    continue
+                try:
+                    catalogs.append((label, json.loads(path.read_text(encoding="utf-8"))))
+                except Exception:
+                    pass
+            return catalogs
+
+        probed = {}
+
+        def probed_windows(base, key):
+            if base in probed:
+                return probed[base]
+            found = {}
             for suffix in ("/models", "/v1/models"):
                 try:
-                    ctx = probe(base + suffix, wanted)
-                except Exception:
-                    ctx = None
-                if ctx:
+                    req = urllib.request.Request(base + suffix)
+                    if key:
+                        req.add_header("authorization", "Bearer " + key)
+                        req.add_header("x-api-key", key)
+                    with urllib.request.urlopen(req, timeout=1.5) as r:
+                        data = json.loads(r.read().decode("utf-8", "replace"))
+                except Exception as exc:
+                    # 超时说明端口有人听但不应答（引擎冷启动或加载中），同一个
+                    # 服务器的另一个路径也会超时；只有立即被拒或 404 值得再试。
+                    if isinstance(exc, TimeoutError) or "timed out" in str(exc):
+                        break
+                    continue
+                entries = data.get("data") or data.get("models") or []
+                for m in entries:
+                    v = window_of(m)
+                    if not v:
+                        continue
+                    for k in {m.get("id"), (m.get("id") or "").split("/")[-1]} - {None, ""}:
+                        found.setdefault(k, v)
+                # 本地端点常常只挂一个模型，它用的名字未必和 CCR 记的一致
+                if len(entries) == 1 and found:
+                    found["__single__"] = next(iter(found.values()))
+                if found:
                     break
+            probed[base] = found
+            return found
 
-        if ctx is None:
-            cats = [ccr / "models.json", ccr.parents[2] / ".codex" / "ccr-model-catalog.json"]
-            for cat in cats:
-                if not cat.is_file():
-                    continue
-                try:
-                    data = json.loads(cat.read_text(encoding="utf-8"))
-                except Exception:
-                    continue
+        def resolve(model):
+            # [1m] 是 Claude Code 的窗口标注，目录和 modelMetadata 里都不带它。
+            name = model.split("[", 1)[0].strip()
+            prov, _, part = name.partition("/")
+            if not part:
+                prov, part = "", name
+            p = providers.get(prov) or {}
+            meta = p.get("meta") or {}
+            # 只认这个模型自己的名字。早期版本把 provider 元数据里其它模型的
+            # 名字也放进候选集，结果 deepseek-v4.1-flash 继承了邻居在
+            # models.json 里写的值。
+            wanted = {part, name}
+
+            # 1. CCR 上次探测的结果，存在 provider 上
+            for k in (part, name):
+                v = to_int((meta.get(k) or {}).get("contextWindow")
+                           or (meta.get(k) or {}).get("context_window"))
+                if v:
+                    return v
+
+            # 2. 端点自己，仅回环
+            base = p.get("base") or ""
+            if re.match(r"^https?://(127\.|localhost|\[::1\])", base):
+                found = probed_windows(base, p.get("key") or "")
+                for k in (part, name):
+                    if k in found:
+                        return found[k]
+                if "__single__" in found:
+                    return found["__single__"]
+
+            # 3. 目录。同一个模型名可能对上多条（deepseek/deepseek-v4.1-flash
+            #    写 1050000，alibaba/... 写 1000000），取先出现的等于掷硬币。
+            #    要求它们一致：10% 以内算同一个模型，取小的那个（只会提前压缩，
+            #    不会滞后）；差距更大说明这名字确实是两个东西，那这份文件就
+            #    什么也没说。
+            for label, data in catalog_data():
+                vals = set()
                 for m in data.get("models") or []:
                     if wanted & {m.get("id"), m.get("slug"), m.get("model")}:
-                        for f in ("context_window", "contextWindow",
-                                  "max_context_window", "max_model_len"):
-                            v = to_int(m.get(f))
-                            if v:
-                                ctx = v
-                                break
-                    if ctx:
-                        break
-                if ctx:
-                    break
+                        v = window_of(m)
+                        if v:
+                            vals.add(v)
+                if not vals:
+                    continue
+                v = min(vals)
+                if max(vals) - v > v * 0.1:
+                    continue
+                if label == "catalog" and v == PLACEHOLDER:
+                    continue
+                return v
+            return None
 
-        if ctx:
-            print(ctx)
+        cache = {}
+        for raw in raws:
+            key = raw.split("[", 1)[0].strip()
+            if not key:
+                continue
+            if key not in cache:
+                cache[key] = resolve(raw)
+            if cache[key]:
+                print(f"{raw}\t{cache[key]}")
         raise SystemExit(0)
 
     out = []
@@ -529,13 +619,37 @@ if (-not $RawModel) {
     }
 
     if ($Ask) {
-        Write-Note "Models this profile allows:"
+        # 每行带上这个模型自己的上下文窗口。不给这一列，菜单就是在盲选：上下文
+        # 差四倍的两个模型在一列名字里长得一模一样。整张菜单只调一次 python
+        # （模式是批量的），逐个调用会把同一个库和目录读十几遍。
+        #
+        # 列的是模型窗口，未必是压缩发生的地方：settings.json 给某个模型钉了
+        # 更低的 autoCompactWindow 时，运行时取 min(窗口, 钉值)。这里不套那个
+        # 钉值，因为同一个解析器还要喂 CLAUDE_CODE_MAX_CONTEXT_TOKENS，而它
+        # 必须是对模型的陈述。
+        $winOf = @{}
+        if ($env:CCR_CONTEXT_WINDOW -match '^\d+$') {
+            foreach ($m in $Avail) { $winOf[$m] = $env:CCR_CONTEXT_WINDOW }
+        }
+        elseif ($env:CCR_CONTEXT_WINDOW -ne 'off') {
+            $ctxArgs = @($CcrDir, 'ctx') + $Avail
+            foreach ($line in @(Invoke-CcrPy $PyProfiles $ctxArgs)) {
+                if ("$line" -match '^(.*)\t(\d+)\s*$') { $winOf[$Matches[1]] = $Matches[2] }
+            }
+        }
+        # 控制台代码页是 OEM（中文机器上常见 936），非 ASCII 的破折号会变成
+        # 乱码，所以这里的交互文案一律用 ASCII。
+        Write-Note "Models this profile allows - pick one (context window in brackets):"
         for ($k = 0; $k -lt $Avail.Count; $k++) {
             $mark = if ($k -eq 0) { '  (current)' } else { '' }
-            Write-Note ("  {0}) {1}{2}" -f ($k + 1), (ConvertTo-ShortModel $Avail[$k]), $mark)
+            $winLabel = Format-WindowLabel $winOf[$Avail[$k]]
+            if (-not $winLabel) { $winLabel = 'unknown' }
+            Write-Note ("  {0}) {1}  [{2}]{3}" -f ($k + 1), (ConvertTo-ShortModel $Avail[$k]), $winLabel, $mark)
         }
+        Write-Note "  0) cancel"
         $answer = Read-Host "Select [1] "
         if ([string]::IsNullOrWhiteSpace($answer)) { $RawModel = $Avail[0] }
+        elseif ($answer -eq '0') { Write-Note "Cancelled."; exit 130 }
         elseif ($answer -match '^\d+$' -and [int]$answer -ge 1 -and [int]$answer -le $Avail.Count) {
             $RawModel = $Avail[[int]$answer - 1]
         }
@@ -664,12 +778,20 @@ $env:NO_PROXY = '127.0.0.1,localhost,::1'
 $env:no_proxy = '127.0.0.1,localhost,::1'
 
 $CtxForced = $false
-if ($ContextWindow -gt 0) {
-    $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = "$ContextWindow"
+$ContextWindowOff = $false
+if ($ContextWindow -match '^\d+$' -and [int]$ContextWindow -gt 0) {
+    $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = "$([int]$ContextWindow)"
     $CtxForced = $true
 }
-elseif ($env:CCR_CONTEXT_WINDOW -eq 'off') {
+elseif ($ContextWindow -eq 'off' -or $env:CCR_CONTEXT_WINDOW -eq 'off') {
+    # off：什么都不设，让 Claude Code 自己走它的链条（目录 → settings.json
+    # 的 autoCompactWindow → 200000）。
+    $ContextWindowOff = $true
     Remove-Item Env:CLAUDE_CODE_MAX_CONTEXT_TOKENS -ErrorAction SilentlyContinue
+}
+elseif ($ContextWindow -and $ContextWindow -notmatch '^0+$') {
+    [Console]::Error.WriteLine("ccr-claude: --context-window takes a token count or 'off', got `"$ContextWindow`"")
+    exit 1
 }
 elseif ($env:CCR_CONTEXT_WINDOW -match '^\d+$') {
     $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = $env:CCR_CONTEXT_WINDOW
@@ -681,9 +803,11 @@ else {
     # 空管道而不是 $null 值，强制转换对"没有对象"不生效，$resolved 仍是 $null，
     # 下一行 .Trim() 直接抛 InvalidOperation（开了 Stop，整个启动中止）。
     # 目录里查不到的模型（比如刚加的本地模型）就会走到这条路。
-    $resolved = ((Invoke-CcrPy $PyProfiles @($CcrDir, 'ctx', $CcrModel)) -join '').Trim()
-    if ($resolved -match '^\d+$') {
-        $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = $resolved
+    # ctx 模式输出 "model<TAB>tokens"，取 Tab 后面那段。
+    $resolved = ((Invoke-CcrPy $PyProfiles @($CcrDir, 'ctx', $CcrModel)) -join "`n")
+    if ($resolved -match '(?m)^[^\t\r\n]*\t(\d+)\s*$') { $resolved = $Matches[1] }
+    if ($resolved -match '^\s*(\d+)\s*$') {
+        $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = $Matches[1]
         $CtxForced = $true
     }
 }
@@ -762,11 +886,17 @@ $ModelLine = $ModelForEnv
 if ($ModelLabel -and $ModelLabel -ne $ModelForEnv) { $ModelLine = "$ModelForEnv ($ModelLabel)" }
 Write-Note "Claude model: $ModelLine  (from $ModelSource)"
 Write-Note "CCR: $BaseUrl"
+# "没解析到就当作 200000" 是错的：本脚本什么都不设时，Claude Code 仍然会用
+# settings.json 里的 autoCompactWindow，200000 只是最后兜底。
 if ($env:CLAUDE_CODE_MAX_CONTEXT_TOKENS) {
     Write-Note "Context window: $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS tokens"
 }
+elseif ($ContextWindowOff) {
+    Write-Note "Context window: not set (--context-window off; Claude Code decides)"
+}
 else {
-    Write-Note "Context window: not set here; settings.json decides"
+    Write-Note "Context window: unresolved here; Claude Code falls back to"
+    Write-Note "                autoCompactWindow in settings.json, else 200000"
 }
 
 # ---------------------------------------------------------------- 启动
