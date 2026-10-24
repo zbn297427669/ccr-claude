@@ -8,3 +8,7 @@ Thumbs.db
 # Claude Code binaries are hundreds of MB; never commit them.
 *.exe
 *.msi
+
+# Python bytecode: never useful in git, and it is platform/version specific.
+__pycache__/
+*.pyc
