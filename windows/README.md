@@ -60,11 +60,16 @@ No wrapper is needed for the two same-named files: PowerShell's `Get-Command` pi
 
 ### `claude.exe` need not sit next to the script
 
-The launcher looks for `claude` in this order:
+The launcher looks for `claude` in this order, and takes the first hit:
 
-1. `CCR_CLAUDE_EXE` — the exe itself, or a directory holding `claude*` executables
+1. `CCR_CLAUDE_EXE` — the executable itself, or a directory holding `claude*` executables
 2. `claude` on `PATH`
-3. `claude-*-win32-x64.exe` in the script's own directory
+3. `claude.exe` / `claude.cmd` in the script's own directory
+4. `claude-<version>-win32-x64.exe` in the script's own directory
+
+Given a directory, it prefers the name **without** a version (`claude.exe` over
+`claude-2.1.310-win32-x64.exe`) — that is the normal install name. Versioned
+files are the fallback, newest first.
 
 Point it at wherever the exe already lives:
 
@@ -73,7 +78,20 @@ Point it at wherever the exe already lives:
   'CCR_CLAUDE_EXE', 'C:\path\to\claude', 'User')   # a directory, or the exe's full path
 ```
 
-Rule 3 used to be the only way, which forced a hand-copied script into the same folder as a 296MB exe — and that copy went stale on every repo update. Now the script stays in the repo and follows `git pull`; the exe stays where it is.
+Rules 3 and 4 used to be the only way, which forced a hand-copied script into the same folder as a 296MB exe — and that copy went stale on every repo update. Now the script stays in the repo and follows `git pull`; the exe stays where it is.
+
+### When more than one `claude` is installed
+
+If you keep a downloaded exe around *and* installed the npm package, the launcher
+does **not** pick the newer one — it takes the first hit in the list above. So:
+
+- `CCR_CLAUDE_EXE` set → that one, even if `PATH` has a newer version
+- not set → `PATH` order decides; npm's `claude` usually lives in `%APPDATA%\npm`
+- neither → an exe next to the script
+
+The two versions differ in behaviour — window figures, which fields the
+`--settings` overlay can carry — so pin it rather than letting a reinstall
+silently change what runs.
 
 ## Usage
 

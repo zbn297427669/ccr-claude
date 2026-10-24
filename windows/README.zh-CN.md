@@ -64,11 +64,16 @@ cmd 的 `where` 取 `.cmd`。**在 PowerShell 里敲 `ccr-claude` 走的是 `.ps
 
 ### claude.exe 不必和脚本同目录
 
-脚本按这个顺序找 `claude`：
+脚本按这个顺序找 `claude`，**先命中先用**：
 
-1. `CCR_CLAUDE_EXE` —— 指向 exe 本身，或指向含 `claude*` 可执行文件的目录
+1. `CCR_CLAUDE_EXE` —— 指向可执行文件本身，或指向含 `claude*` 可执行文件的目录
 2. `PATH` 上的 `claude`
-3. 脚本同目录的 `claude-*-win32-x64.exe`
+3. 脚本同目录的 `claude.exe` / `claude.cmd`
+4. 脚本同目录的 `claude-<版本>-win32-x64.exe`
+
+指向目录时，目录里优先选**不带版本号**的名字（`claude.exe` 而不是
+`claude-2.1.310-win32-x64.exe`），那才是正常安装的入口；只有版本化的文件时
+按名字降序取最新。
 
 只留下载好、并留在原处的 exe，然后：
 
@@ -77,8 +82,21 @@ cmd 的 `where` 取 `.cmd`。**在 PowerShell 里敲 `ccr-claude` 走的是 `.ps
   'CCR_CLAUDE_EXE', 'C:\path\to\claude', 'User')   # 目录，或直接写 exe 的完整路径
 ```
 
-早先只能靠第 3 条，于是脚本被迫和 296MB 的 exe 手抄到一个目录里，仓库一更新
-那个副本就过期。现在脚本留在仓库里跟着 git 走，exe 留在原处。
+早先只能靠第 3、4 条，于是脚本被迫和 296MB 的 exe 手抄到一个目录里，仓库一
+更新那个副本就过期。现在脚本留在仓库里跟着 git 走，exe 留在原处。
+
+### 同时装了多个 claude 会怎样
+
+同一台机器上既放了下载的 exe、又用 npm 装了一份时，**启动器不会挑“更新”的
+那个，只按上面的顺序挑**。所以：
+
+- 设了 `CCR_CLAUDE_EXE` → 一定是它，哪怕 PATH 上有个更新的
+- 没设 → PATH 顺序决定；npm 的 `claude` 通常在 `%APPDATA%\npm`，先于后加的目录
+- 都不在 PATH、但脚本同目录有 exe → 用它
+
+想确认实际跑的是哪个，用 `CCR_CLAUDE_EXE` 钉死，或者看 `--version` 的输出与
+各处的版本对比。两个版本行为不同（窗口数值、`--settings` 覆盖层支持的字段都
+随版本变），不钉死就容易“昨天还好、今天变了”。
 
 ## 用法
 
