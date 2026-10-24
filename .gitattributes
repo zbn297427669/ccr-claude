@@ -1,5 +1,22 @@
-# The PowerShell launcher must ship as UTF-8 with BOM and CRLF: PowerShell 5.1
-# decodes a BOM-less .ps1 as GBK, and .cmd files want CRLF for the old parser.
+# Line endings, so a Windows checkout and a Linux one produce the same tree.
+#
+# The two Windows files must be UTF-8 with BOM and CRLF -- PowerShell 5.1 decodes
+# a BOM-less .ps1 as GBK, and cmd's parser wants CRLF.
 *.ps1   text eol=crlf
 *.cmd   text eol=crlf
 *.sh    text eol=lf
+
+# Everything else is LF everywhere, stated explicitly. This is not cosmetic:
+# normalising to CRLF has no "safe" moment, and each file listed here would
+# otherwise pick up a different ending depending on the machine's
+# core.autocrlf. Measured on Windows Git 2.x with core.autocrlf=true set at the
+# *system* level (Git for Windows' installer default), cloning this repo leaves
+# ten tracked files modified before anyone touches them: every .md, LICENSE and
+# .gitignore. The next `git commit -a` then rewrites the whole documentation in
+# CRLF, and Linux users see a 200-line diff per file.
+*.md       text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+LICENSE    text eol=lf
+*.py       text eol=lf
+*.yml      text eol=lf
