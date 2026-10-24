@@ -64,7 +64,11 @@ if (-not $RepoPath) {
 if (-not (Test-Path -LiteralPath $RepoPath -PathType Container)) {
     Bad "repo not found: $RepoPath"
 }
-$RepoPath = (Resolve-Path -LiteralPath $RepoPath).Path
+# Provider-qualified paths: Resolve-Path returns
+# `Microsoft.PowerShell.Core\FileSystem::\\wsl.localhost\...`, and both the
+# written and the reported form need to be plain. Without this, a UNC check
+# against the string never fires.
+$RepoPath = (Resolve-Path -LiteralPath $RepoPath).ProviderPath
 $WinDir = Join-Path $RepoPath 'windows'
 $Ps1 = Join-Path $WinDir 'ccr-claude.ps1'
 $Cmd = Join-Path $WinDir 'ccr-claude.cmd'
@@ -99,11 +103,11 @@ if (Test-Path -LiteralPath $ClaudeExe -PathType Container) {
         Where-Object { $_.Extension -in '.exe', '.cmd', '.bat' } |
         Sort-Object Name -Descending | Select-Object -First 1
     if (-not $hit) { Bad "no claude* executable in $ClaudeExe" }
-    $ExeDir = (Resolve-Path -LiteralPath $ClaudeExe).Path
+    $ExeDir = (Resolve-Path -LiteralPath $ClaudeExe).ProviderPath
     $ExeFile = $hit.FullName
 }
 elseif (Test-Path -LiteralPath $ClaudeExe -PathType Leaf) {
-    $ExeFile = (Resolve-Path -LiteralPath $ClaudeExe).Path
+    $ExeFile = (Resolve-Path -LiteralPath $ClaudeExe).ProviderPath
     $ExeDir = Split-Path -Parent $ExeFile
 }
 else {
