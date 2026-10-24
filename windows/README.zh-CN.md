@@ -46,6 +46,24 @@ where ccr-claude                 :: <repo>\windows\ccr-claude.cmd
 cmd 的 `where` 取 `.cmd`。**在 PowerShell 里敲 `ccr-claude` 走的是 `.ps1`**，上面
 关于 `%*` 的两个坑自动绕开。
 
+### claude.exe 不必和脚本同目录
+
+脚本按这个顺序找 `claude`：
+
+1. `CCR_CLAUDE_EXE` —— 指向 exe 本身，或指向含 `claude*` 可执行文件的目录
+2. `PATH` 上的 `claude`
+3. 脚本同目录的 `claude-*-win32-x64.exe`
+
+只留下载好、并留在原处的 exe，然后：
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  'CCR_CLAUDE_EXE', 'C:\path\to\claude', 'User')   # 目录，或直接写 exe 的完整路径
+```
+
+早先只能靠第 3 条，于是脚本被迫和 296MB 的 exe 手抄到一个目录里，仓库一更新
+那个副本就过期。现在脚本留在仓库里跟着 git 走，exe 留在原处。
+
 ## 用法
 
 ```bat
@@ -94,7 +112,8 @@ powershell -NoProfile -File <repo>\windows\ccr-claude.ps1 -p "解释这个仓库
 | 网关地址 | `CCR_BASE_URL`，否则 config 里的 `routerEndpoint`，否则 `gateway.host:port` |
 | 客户端密钥 | `api_keys` 表（仅 `encryption == plain`），否则 `bin\ccr-claude-code-api-key-<pid>.cmd` 里的 `ccr-profile-…` |
 | 模型 | `--model` / `MODEL` / profile 的 `model` / 菜单选择 |
-| 上下文窗口 | 供应商 `/v1/models`（仅回环）→ CCR 的 `modelMetadata.contextWindow` → 每机 catalog |
+| 上下文窗口 | CCR 的 `modelMetadata.contextWindow` → 回环 `/v1/models` → `models.json`（`limits.contextTokens`）→ 每机 catalog，详见 [CONTEXT-WINDOW.md](../CONTEXT-WINDOW.md) |
+| `claude` 可执行文件 | `CCR_CLAUDE_EXE` → `PATH` → 脚本同目录 |
 
 密钥只在运行时读取，写进进程环境变量，不落盘。`python` 是必需的：PowerShell 没有
 内置 SQLite，读库靠它，三个库文件（含 `-wal`/`-shm`）先拷到临时目录再只读打开，不

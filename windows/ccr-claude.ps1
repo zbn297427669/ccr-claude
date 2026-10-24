@@ -3,8 +3,12 @@
   按 CCR Agent profile 启动 Windows 版 Claude Code。
 
 .DESCRIPTION
-  与 WSL 侧的 ccr-claude/wsl/start-claude.sh 对等，但直接跑本目录下的
-  claude-*-win32-x64.exe，不经过 CCR 生成的 wrapper 中间层。
+  与 WSL 侧的 ccr-claude/wsl/start-claude.sh 对等，但直接跑 Windows 版
+  claude.exe，不经过 CCR 生成的 wrapper 中间层。
+
+  这个脚本不要求 claude.exe 和它同目录：用 CCR_CLAUDE_EXE 指过去即可，
+  这样脚本可以留在仓库里跟着 git 更新，exe 留在原处。查找顺序见
+  Find-ClaudeExe。
 
   所需信息一律从 CCR 安装目录发现，脚本内不含密钥：
     - CCR 数据目录（config.sqlite / bin/api-key）
@@ -865,7 +869,25 @@ try {
 catch { }
 
 # ---------------------------------------------------------------- 找 claude
+# 三种来源，按顺序：
+#   1. CCR_CLAUDE_EXE —— 一个 exe 路径，或含 claude-*.exe 的目录
+#   2. PATH 上的 claude
+#   3. 本脚本同目录的 claude-*-win32-x64.exe
+#
+# 第 3 条曾经是唯一可行的办法，于是脚本被迫和 296MB 的 exe 住在同一个手抄
+# 目录里，仓库一更新它就过期。第 1 条把两者解开：exe 留在原地，脚本留在仓库。
 function Find-ClaudeExe {
+    $want = $env:CCR_CLAUDE_EXE
+    if ($want) {
+        if (Test-Path -LiteralPath $want -PathType Leaf) { return (Resolve-Path -LiteralPath $want).Path }
+        if (Test-Path -LiteralPath $want -PathType Container) {
+            $hit = Get-ChildItem -LiteralPath $want -Filter 'claude*' -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Extension -in '.exe', '.cmd', '.bat' } |
+                Sort-Object Name -Descending | Select-Object -First 1
+            if ($hit) { return $hit.FullName }
+        }
+        Stop-With "CCR_CLAUDE_EXE points at nothing runnable: $want"
+    }
     $c = Get-Command claude -ErrorAction SilentlyContinue
     if ($c) { return $c.Source }
     $here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
@@ -877,7 +899,7 @@ function Find-ClaudeExe {
 
 $ClaudeExe = Find-ClaudeExe
 if (-not $ClaudeExe) {
-    Stop-With "claude executable not found. Put it next to this script, or on PATH."
+    Stop-With "claude executable not found. Set CCR_CLAUDE_EXE to the exe (or its directory), put it on PATH, or place it next to this script."
 }
 
 # ---------------------------------------------------------------- 报告

@@ -38,6 +38,23 @@ where ccr-claude                 :: <repo>\windows\ccr-claude.cmd
 
 No wrapper is needed for the two same-named files: PowerShell's `Get-Command` picks `.ps1` first per `PATHEXT`, cmd's `where` picks `.cmd`. **In PowerShell, `ccr-claude` runs the `.ps1`**, so the two `%*` traps above never apply.
 
+### `claude.exe` need not sit next to the script
+
+The launcher looks for `claude` in this order:
+
+1. `CCR_CLAUDE_EXE` — the exe itself, or a directory holding `claude*` executables
+2. `claude` on `PATH`
+3. `claude-*-win32-x64.exe` in the script's own directory
+
+Point it at wherever the exe already lives:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  'CCR_CLAUDE_EXE', 'C:\path\to\claude', 'User')   # a directory, or the exe's full path
+```
+
+Rule 3 used to be the only way, which forced a hand-copied script into the same folder as a 296MB exe — and that copy went stale on every repo update. Now the script stays in the repo and follows `git pull`; the exe stays where it is.
+
 ## Usage
 
 ```bat
@@ -77,7 +94,8 @@ When `MODEL` / `--model` already names a model, the model menu does not appear �
 | Gateway URL | `CCR_BASE_URL`, else `routerEndpoint`, else `gateway.host:port` |
 | Client key | `api_keys` table (`encryption == plain` only), else `ccr-profile-…` inside `bin\ccr-claude-code-api-key-<pid>.cmd` |
 | Model | `--model` / `MODEL` / the profile's `model` / the menu |
-| Context window | provider `/v1/models` (loopback only) → CCR `modelMetadata.contextWindow` → per-machine catalog |
+| Context window | CCR `modelMetadata.contextWindow` → loopback `/v1/models` → `models.json` (`limits.contextTokens`) → per-machine catalog. See [CONTEXT-WINDOW.md](../CONTEXT-WINDOW.md) |
+| `claude` exe | `CCR_CLAUDE_EXE` → `PATH` → next to the script |
 
 The key is read at runtime and written into the process environment; it is never persisted. `python` is required — PowerShell has no built-in SQLite. The three database files (including `-wal`/`-shm`) are copied to a temp directory and opened read-only so CCR is not locked.
 

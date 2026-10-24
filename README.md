@@ -49,6 +49,9 @@ Everything else — which profile, which model, which context window — is the 
 $repo = 'C:\path\to\ccr-claude'
 [Environment]::SetEnvironmentVariable(
   'Path', "$repo\windows;" + [Environment]::GetEnvironmentVariable('Path','User'), 'User')
+# Wherever claude.exe already lives -- it need not sit next to the script:
+[Environment]::SetEnvironmentVariable(
+  'CCR_CLAUDE_EXE', 'C:\path\to\claude', 'User')
 ```
 
 ```bat

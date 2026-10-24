@@ -49,6 +49,9 @@
 $repo = 'C:\path\to\ccr-claude'
 [Environment]::SetEnvironmentVariable(
   'Path', "$repo\windows;" + [Environment]::GetEnvironmentVariable('Path','User'), 'User')
+# claude.exe 留在原地即可，不必和脚本同目录：
+[Environment]::SetEnvironmentVariable(
+  'CCR_CLAUDE_EXE', 'C:\path\to\claude', 'User')
 ```
 
 ```bat
