@@ -29,7 +29,13 @@
 ├── README.md            本文件
 ├── README.zh-CN.md
 ├── CONTEXT-WINDOW.md    为什么窗口要由启动器自己传
+├── CHANGELOG.md         每个版本改了什么
+├── RELEASING.md         怎么发版、发布包必须包含什么
 ├── LICENSE              MIT
+├── .github/workflows/
+│   └── check.yml        两个启动器内嵌代码的语法检查
+├── tools/
+│   └── check.py         同一套检查，本地可跑
 ├── windows/
 │   ├── ccr-claude.ps1   正式入口
 │   ├── ccr-claude.cmd   双击 / cmd 用的薄壳
@@ -39,6 +45,13 @@
     ├── start-claude.sh  正式入口
     ├── README.md
     └── README.zh-CN.md
+```
+
+改任一启动器之前先跑检查——它会解析两个脚本里内嵌的 Python，那段代码平时
+没有任何解释器从磁盘上读过：
+
+```bash
+python3 -I tools/check.py --verbose
 ```
 
 ## 快速开始

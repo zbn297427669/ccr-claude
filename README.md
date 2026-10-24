@@ -29,7 +29,13 @@ Everything else — which profile, which model, which context window — is the 
 ├── README.md            this file
 ├── README.zh-CN.md
 ├── CONTEXT-WINDOW.md    why the context window has to be passed by hand
+├── CHANGELOG.md         what changed, per version
+├── RELEASING.md         how a version is cut and what the archives must contain
 ├── LICENSE              MIT
+├── .github/workflows/
+│   └── check.yml        syntax checks for the embedded code in both launchers
+├── tools/
+│   └── check.py         the same checks, runnable locally
 ├── windows/
 │   ├── ccr-claude.ps1   real entry point
 │   ├── ccr-claude.cmd   thin shell for double-click / cmd
@@ -39,6 +45,13 @@ Everything else — which profile, which model, which context window — is the 
     ├── start-claude.sh  real entry point
     ├── README.md
     └── README.zh-CN.md
+```
+
+Before changing either launcher, run the checks — they parse the Python embedded
+in both scripts, which no interpreter otherwise reads from disk:
+
+```bash
+python3 -I tools/check.py --verbose
 ```
 
 ## Quick start

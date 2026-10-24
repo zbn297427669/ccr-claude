@@ -1,0 +1,55 @@
+name: check
+
+# Both launchers are single files whose real logic lives in embedded Python
+# that no interpreter ever reads from disk: the shell feeds heredocs on stdin,
+# PowerShell writes `$PyProfiles` to a temp file. A syntax error there is
+# invisible to `bash -n` and to the PowerShell parser alike, and it surfaces
+# only on whichever machine runs that launcher first. These checks parse the
+# Python inside the scripts, so a broken edit fails here instead.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Everything that can be checked by reading the files as text.
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # bash -n is guaranteed on ubuntu runners, so this job never skips it.
+      - name: Run checks
+        run: python3 -I tools/check.py --verbose
+
+  # On Windows the real PowerShell parser is on PATH, so `tools/check.py` runs
+  # its fifth check here instead of skipping it. This is also the only place
+  # that proves a checkout applies `.gitattributes`' eol=crlf to the .ps1 and
+  # .cmd before anyone downloads a release.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run checks
+        shell: pwsh
+        run: python -I tools/check.py --verbose
+      # A second, direct parse: if the here-string or the encoding were broken,
+      # this fails with PowerShell's own diagnostic rather than ours.
+      - name: Parse the launcher with the PowerShell parser
+        shell: pwsh
+        run: |
+          $errs = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD/windows/ccr-claude.ps1", [ref]$null, [ref]$errs)
+          if ($errs.Count) { $errs | ForEach-Object { $_.Message }; exit 1 }
+          "parse OK"
