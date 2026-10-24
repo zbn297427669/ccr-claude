@@ -25,8 +25,24 @@
 
 ## 装成命令：`ccr-claude`
 
-把 `windows` 子目录加到用户 PATH 一次，两个 shell 就都能直接敲 `ccr-claude`
-（下面把仓库位置写成 `<repo>`，换成你自己的路径）：
+用仓库自带的脚本装一次，两个 shell 就都能直接敲 `ccr-claude`：
+
+```powershell
+# 先看它打算改什么，什么都不会写
+.\windows\install.ps1
+
+# 确认无误后写入（会先备份当前的 PATH 和 CCR_CLAUDE_EXE）
+.\windows\install.ps1 -ClaudeExe 'C:\path\to\claude' -Apply
+```
+
+它做三件事：把本仓库的 `windows` 目录加进用户 PATH、把 `CCR_CLAUDE_EXE` 指向
+`claude.exe`、把 PATH 上还留着旧手抄脚本的目录摘掉。写入前会把原值备份到
+`%LOCALAPPDATA%\ccr-claude\install-backup-<时间>.txt`。
+
+它会拒绝 UNC 路径（`\\wsl.localhost\...`）：RemoteSigned 策略下 `.ps1` 在那儿
+根本跑不起来，装上去只会得到一个启动就失败的安装。
+
+仓库必须放在**本地盘**上。手动装也一样，下面这段等价于脚本：
 
 ```powershell
 $repo = '<repo>'   # 例如 C:\tools\ccr-claude

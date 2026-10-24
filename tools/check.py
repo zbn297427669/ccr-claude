@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SH = ROOT / "wsl" / "start-claude.sh"
 PS1 = ROOT / "windows" / "ccr-claude.ps1"
 CMD = ROOT / "windows" / "ccr-claude.cmd"
+INSTALL_PS1 = ROOT / "windows" / "install.ps1"
 
 VERBOSE = "--verbose" in sys.argv
 
@@ -124,35 +125,45 @@ def check_ps_embedded_python() -> None:
 
 
 def check_ps_syntax() -> None:
-    """Parse the .ps1 with PowerShell's own parser when pwsh is available.
+    """Parse every .ps1 with PowerShell's own parser when one is available.
 
     Windows ships Windows PowerShell 5.1 (`powershell.exe`); anything else
     ships `pwsh`. Both parse the same language for our purposes.
     """
-    if not PS1.is_file():
-        fail("powershell syntax", f"{PS1} is missing")
-        return
     exe = shutil.which("pwsh") or shutil.which("powershell")
     if not exe:
         skip("powershell syntax", "no pwsh / powershell on PATH")
         return
-    # Pass the path as an argument rather than interpolating it into the
-    # command line: paths on this repo can contain spaces and quotes.
+    targets = [p for p in (PS1, INSTALL_PS1) if p.is_file()]
+    if not targets:
+        fail("powershell syntax", "no .ps1 files found")
+        return
+    # Pass paths as arguments rather than interpolating them into the command
+    # line: repo paths can contain spaces and quotes.
     script = (
-        "$errs = $null; "
-        "$null = [System.Management.Automation.Language.Parser]::ParseFile("
-        "$args[0], [ref]$null, [ref]$errs); "
-        "if ($errs.Count) { $errs | ForEach-Object { $_.Message }; exit 1 }"
+        "$bad = 0; "
+        "foreach ($f in $args) { "
+        "  $errs = $null; "
+        "  $null = [System.Management.Automation.Language.Parser]::ParseFile("
+        "$f, [ref]$null, [ref]$errs); "
+        "  if ($errs.Count) { "
+        "    Write-Output $f; "
+        "    $errs | ForEach-Object { Write-Output ('  ' + $_.Message) }; "
+        "    $bad = 1 "
+        "  } "
+        "}; "
+        "exit $bad"
     )
     proc = subprocess.run(
-        [exe, "-NoProfile", "-NonInteractive", "-Command", script, str(PS1)],
+        [exe, "-NoProfile", "-NonInteractive", "-Command", script]
+        + [str(p) for p in targets],
         capture_output=True,
         text=True,
     )
     if proc.returncode:
         fail("powershell syntax", proc.stdout or proc.stderr)
     else:
-        ok("powershell syntax")
+        ok(f"powershell syntax ({len(targets)} file(s))")
 
 
 def check_windows_encoding() -> None:
@@ -164,7 +175,7 @@ def check_windows_encoding() -> None:
     checkout applies `.gitattributes`' `eol=crlf` -- so checking here also
     catches an editor that silently rewrote the file as LF.
     """
-    for path, want_bom in ((PS1, True), (CMD, False)):
+    for path, want_bom in ((PS1, True), (INSTALL_PS1, True), (CMD, False)):
         name = f"encoding {path.name}"
         if not path.is_file():
             fail(name, f"{path} is missing")

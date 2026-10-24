@@ -20,7 +20,27 @@ So: use the `.ps1` for code snippets, regexes, and anything containing `%`. For 
 
 ## Installing as `ccr-claude`
 
-Put the `windows` subdirectory on your user `PATH` once, and both shells can run `ccr-claude` (`<repo>` is wherever you cloned this):
+Run the repo's own installer once, and both shells can run `ccr-claude`:
+
+```powershell
+# prints the plan and writes nothing
+.\windows\install.ps1
+
+# write it (backs up the current PATH and CCR_CLAUDE_EXE first)
+.\windows\install.ps1 -ClaudeExe 'C:\path\to\claude' -Apply
+```
+
+It does three things: adds this repo's `windows` directory to the user `PATH`,
+points `CCR_CLAUDE_EXE` at `claude.exe`, and removes any PATH entry still holding
+a hand-copied launcher. The originals are saved to
+`%LOCALAPPDATA%\ccr-claude\install-backup-<timestamp>.txt` before anything is
+written.
+
+It refuses a UNC path (`\\wsl.localhost\...`): `RemoteSigned` will not run a
+`.ps1` from one, so installing from there produces a launcher that fails at
+startup. The repo has to live on a local drive.
+
+Doing it by hand is the same thing:
 
 ```powershell
 $repo = '<repo>'   # e.g. C:\tools\ccr-claude

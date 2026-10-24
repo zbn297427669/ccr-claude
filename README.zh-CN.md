@@ -56,16 +56,15 @@ python3 -I tools/check.py --verbose
 
 ## 快速开始
 
-**Windows**（PowerShell）：
+**Windows**（PowerShell）——仓库 clone 到本地盘，然后：
 
 ```powershell
-$repo = 'C:\path\to\ccr-claude'
-[Environment]::SetEnvironmentVariable(
-  'Path', "$repo\windows;" + [Environment]::GetEnvironmentVariable('Path','User'), 'User')
-# claude.exe 留在原地即可，不必和脚本同目录：
-[Environment]::SetEnvironmentVariable(
-  'CCR_CLAUDE_EXE', 'C:\path\to\claude', 'User')
+.\windows\install.ps1 -ClaudeExe 'C:\path\to\claude'   # 试运行，只打印计划
+.\windows\install.ps1 -ClaudeExe 'C:\path\to\claude' -Apply
 ```
+
+第二条会把 `windows\` 加进用户 PATH，把 `CCR_CLAUDE_EXE` 指向 `claude.exe`
+实际所在的位置（不必和脚本同目录），并在写入前备份这两项原值。
 
 ```bat
 ccr-claude                      :: 多个 enabled Agent 时选 profile

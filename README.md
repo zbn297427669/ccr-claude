@@ -56,16 +56,16 @@ python3 -I tools/check.py --verbose
 
 ## Quick start
 
-**Windows** (PowerShell):
+**Windows** (PowerShell) — clone onto a local drive, then:
 
 ```powershell
-$repo = 'C:\path\to\ccr-claude'
-[Environment]::SetEnvironmentVariable(
-  'Path', "$repo\windows;" + [Environment]::GetEnvironmentVariable('Path','User'), 'User')
-# Wherever claude.exe already lives -- it need not sit next to the script:
-[Environment]::SetEnvironmentVariable(
-  'CCR_CLAUDE_EXE', 'C:\path\to\claude', 'User')
+.\windows\install.ps1 -ClaudeExe 'C:\path\to\claude'   # dry run: prints the plan
+.\windows\install.ps1 -ClaudeExe 'C:\path\to\claude' -Apply
 ```
+
+The second form adds `windows\` to the user `PATH`, sets `CCR_CLAUDE_EXE` to
+wherever `claude.exe` already lives (it need not sit next to the script), and
+backs up both values first.
 
 ```bat
 ccr-claude                      :: profile menu when several are enabled
