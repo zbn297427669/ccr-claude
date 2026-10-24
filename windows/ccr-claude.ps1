@@ -904,17 +904,36 @@ catch { }
 # 入口；下载来的版本化 exe 只是同一份东西的另一个名字。原先按名字降序取第一
 # 个，`claude-2.1.310-win32-x64.exe` 会排在 `claude.exe` 之前（'-' 在 '.' 之前
 # 比较时有序），于是选中了版本化那份——反了。
+
+# 版本号按数字比较，不是按字符串。
+#
+# 字符串降序会挑错：`claude-2.1.9-win32-x64.exe` 排在
+# `claude-2.1.310-win32-x64.exe` 前面，因为逐字符比较时 '9' > '3' —— 实测
+# 四个文件时选中的正是 2.1.9。多留一份旧 exe 就会在不知不觉中退回旧版。
+function Get-VersionKey([string]$Name) {
+    $m = [regex]::Match($Name, '-(\d+(?:\.\d+)*)-')
+    if (-not $m.Success) { return [version]'0.0' }
+    $v = $m.Groups[1].Value
+    # [version] 要至少两段；`claude-3-win32-x64.exe` 这种补一段 0。
+    if ($v -notmatch '\.') { $v = "$v.0" }
+    try { return [version]$v } catch { return [version]'0.0' }
+}
+
+# 目录里的候选，最好的在前：无版本号的名字（正常安装）> 版本高的 > 版本低的。
+function Get-ClaudeCandidate([string]$Dir) {
+    Get-ChildItem -LiteralPath $Dir -Filter 'claude*' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in '.exe', '.cmd', '.bat' } |
+        Sort-Object @{ Expression = { if ($_.Name -match '-\d+\.\d+') { 1 } else { 0 } } },
+                    @{ Expression = { Get-VersionKey $_.Name }; Descending = $true },
+                    @{ Expression = { $_.Name }; Descending = $true }
+}
+
 function Find-ClaudeExe {
     $want = $env:CCR_CLAUDE_EXE
     if ($want) {
         if (Test-Path -LiteralPath $want -PathType Leaf) { return (Resolve-Path -LiteralPath $want).Path }
         if (Test-Path -LiteralPath $want -PathType Container) {
-            $hit = Get-ChildItem -LiteralPath $want -Filter 'claude*' -File -ErrorAction SilentlyContinue |
-                Where-Object { $_.Extension -in '.exe', '.cmd', '.bat' } |
-                # 无版本号的名字优先；同一类里按名字降序，让新版胜出。
-                Sort-Object @{ Expression = { if ($_.Name -notmatch '-\d+\.\d+') { 0 } else { 1 } } },
-                            @{ Expression = { $_.Name }; Descending = $true } |
-                Select-Object -First 1
+            $hit = Get-ClaudeCandidate $want | Select-Object -First 1
             if ($hit) { return $hit.FullName }
         }
         Stop-With "CCR_CLAUDE_EXE points at nothing runnable: $want"
@@ -922,11 +941,9 @@ function Find-ClaudeExe {
     $c = Get-Command claude -ErrorAction SilentlyContinue
     if ($c) { return $c.Source }
     $here = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-    foreach ($pattern in @('claude.exe', 'claude.cmd', 'claude-*-win32-x64.exe')) {
-        $local = Get-ChildItem -Path $here -Filter $pattern -File -ErrorAction SilentlyContinue |
-            Sort-Object Name -Descending | Select-Object -First 1
-        if ($local) { return $local.FullName }
-    }
+    # 同目录：无版本号的先找，再按版本号从高到低。
+    $local = Get-ClaudeCandidate $here | Select-Object -First 1
+    if ($local) { return $local.FullName }
     return $null
 }
 
