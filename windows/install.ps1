@@ -35,19 +35,28 @@
   Skip writing the backup file. Not recommended: the backup is what makes the
   PATH change reversible.
 
+.PARAMETER Alias
+  Also install a .cmd under this name, so the launcher can be called something
+  other than ccr-claude. The alias forwards to ccr-claude.ps1; state
+  (last profile, overlay, backups) stays under ccr-claude either way.
+
 .EXAMPLE
   .\install.ps1
   # shows what would change, touches nothing
 
 .EXAMPLE
   .\install.ps1 -ClaudeExe 'C:\path\to\claude' -Apply
+
+.EXAMPLE
+  .\install.ps1 -ClaudeExe 'C:\path\to\claude' -Alias myclaude -Apply
 #>
 [CmdletBinding()]
 param(
     [string]$RepoPath,
     [string]$ClaudeExe,
     [switch]$Apply,
-    [switch]$NoBackup
+    [switch]$NoBackup,
+    [string]$Alias
 )
 
 $ErrorActionPreference = 'Stop'
@@ -154,6 +163,20 @@ $newPath = ($newEntries -join ';')
 $oldExeVar = $env:CCR_CLAUDE_EXE
 $exeUnchanged = ((Normalize-PathEntry $oldExeVar) -eq (Normalize-PathEntry $ExeDir))
 
+# ---------------------------------------------------------------- 别名
+# 一个 .cmd 就是一份别名：它靠 %~n0 把调用名转交给启动器，内容与文件名叫
+# 什么无关。放在同一个 windows 目录里，PATH 已经指向它，不必再改 PATH。
+if ($Alias) {
+    if ($Alias -notmatch '^[A-Za-z0-9_-]+$') {
+        Bad "-Alias takes letters, digits, '-' and '_' only, got `"$Alias`""
+    }
+    if ($Alias -ieq 'ccr-claude') {
+        Bad "-Alias ccr-claude is the existing name; drop -Alias"
+    }
+}
+$AliasPath = if ($Alias) { Join-Path $WinDir "$Alias.cmd" } else { $null }
+$AliasExists = $AliasPath -and (Test-Path -LiteralPath $AliasPath -PathType Leaf)
+
 # ---------------------------------------------------------------- 计划
 Say "ccr-claude install"
 Say ''
@@ -181,8 +204,15 @@ if ($exeUnchanged) {
     if ($oldExeVar) { Note "change: `"$oldExeVar`" -> `"$ExeDir`"" }
     else { Note "set: $ExeDir" }
 }
+if ($Alias) {
+    Say ''
+    Say "Plan for the alias:"
+    if ($AliasExists) { Note "overwrite: $AliasPath" }
+    else { Note "create: $AliasPath" }
+    Note "call it with: $Alias"
+}
 
-$changes = (-not $alreadyHas) -or ($drop.Count -gt 0) -or (-not $exeUnchanged)
+$changes = (-not $alreadyHas) -or ($drop.Count -gt 0) -or (-not $exeUnchanged) -or [bool]$Alias
 if (-not $changes) {
     Say ''
     Say "Nothing to do -- already installed."
@@ -228,9 +258,26 @@ catch {
     Bad "could not write the user environment: $($_.Exception.Message)"
 }
 
+if ($Alias) {
+    # Copy this repo's .cmd, not a freshly invented one: the alias then has the
+    # same forwarding, the same %~n0, and the same CCR_CLAUDE_PS1 fallback.
+    $SrcCmd = Join-Path $WinDir 'ccr-claude.cmd'
+    try {
+        Copy-Item -LiteralPath $SrcCmd -Destination $AliasPath -Force
+    }
+    catch {
+        Bad "could not write ${AliasPath}: $($_.Exception.Message)"
+    }
+    Say "Alias written: $AliasPath"
+}
+
 Say ''
 Say "Done. Open a new terminal, then:"
 Say "  where ccr-claude"
 Say "  ccr-claude --list-profiles"
+if ($Alias) {
+    Say "  where $Alias"
+    Say "  $Alias --help"
+}
 Say ''
 Warn "The current window keeps the old PATH; a new terminal is required."

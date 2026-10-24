@@ -39,6 +39,19 @@ chmod +x start-claude.sh
 ln -sfn "$(pwd)/start-claude.sh" ~/.local/bin/ccr-claude
 ```
 
+### Calling it by another name
+
+The command name is the link name; nothing in the script hardcodes it:
+
+```bash
+ln -sfn "$(pwd)/start-claude.sh" ~/.local/bin/myclaude
+myclaude --help          # the usage text calls itself myclaude
+```
+
+State does not follow the name: the last profile stays at
+`${XDG_CONFIG_HOME:-~/.config}/ccr-claude/last-profile` and is shared by every
+alias, so renaming keeps it.
+
 Requires: `bash`, `python3`, `claude` on `PATH`, and a running CCR gateway.
 
 ## Usage

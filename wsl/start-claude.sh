@@ -1057,15 +1057,22 @@ preflight_check() {
 }
 
 usage() {
-  cat <<'EOF'
+  # Self-naming: the command name *is* whatever this file was invoked as (a
+  # symlink named `mylauncher` prints `mylauncher`). Nothing else in the script
+  # depends on the name -- state lives under ~/.config/ccr-claude regardless, so
+  # renaming the link does not lose the remembered profile.
+  local me
+  me="$(basename -- "${0:-ccr-claude}")"
+  [[ -n "$me" ]] || me="ccr-claude"
+  cat <<EOF
 Usage:
-  ccr-claude                      # interactive pick when multiple agents enabled
-  ccr-claude --pick               # force menu
-  ccr-claude --profile <id|name>  # select by id / name substring (errors if ambiguous)
-  ccr-claude --list-profiles
-  ccr-claude --model <short-or-long-name>
-  ccr-claude --context-window <tokens|off>
-  MODEL=<name> ccr-claude
+  $me                      # interactive pick when multiple agents enabled
+  $me --pick               # force menu
+  $me --profile <id|name>  # select by id / name substring (errors if ambiguous)
+  $me --list-profiles
+  $me --model <short-or-long-name>
+  $me --context-window <tokens|off>
+  MODEL=<name> $me
 
 Environment:
   CCR_DIR             CCR data dir (contains config.sqlite)

@@ -93,6 +93,28 @@ The two versions differ in behaviour — window figures, which fields the
 `--settings` overlay can carry — so pin it rather than letting a reinstall
 silently change what runs.
 
+### Calling it by another name
+
+The command name *is* the file name; nothing in the scripts hardcodes it. Two ways:
+
+```powershell
+# have the installer create the alias (it copies ccr-claude.cmd)
+.\windows\install.ps1 -ClaudeExe 'C:\path\to\claude' -Alias myclaude -Apply
+```
+
+```bat
+:: or by hand: copy the .cmd and rename it, contents unchanged
+copy <repo>\windows\ccr-claude.cmd <repo>\windows\myclaude.cmd
+```
+
+That works because the `.cmd` passes its own name (`%~n0`) to the launcher through
+`CCR_INVOKED_AS`, so help and errors call themselves by it. `CCR_CLAUDE_PS1` points
+at a launcher that is not sitting next to the `.cmd`.
+
+**State does not follow the name**: the last profile, the `--settings` overlay and
+the install backups stay under `ccr-claude`, so renaming keeps the remembered
+profile. Several aliases share one state directory.
+
 ## Usage
 
 ```bat

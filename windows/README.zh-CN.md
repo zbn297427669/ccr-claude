@@ -98,6 +98,28 @@ cmd 的 `where` 取 `.cmd`。**在 PowerShell 里敲 `ccr-claude` 走的是 `.ps
 各处的版本对比。两个版本行为不同（窗口数值、`--settings` 覆盖层支持的字段都
 随版本变），不钉死就容易“昨天还好、今天变了”。
 
+### 换个名字调用
+
+命令名就是文件名，脚本里没有写死。两种做法：
+
+```powershell
+# 让安装脚本顺手建一个别名（做的是拷贝 ccr-claude.cmd）
+.\windows\install.ps1 -ClaudeExe 'C:\path\to\claude' -Alias myclaude -Apply
+```
+
+```bat
+:: 或者手工：拷贝 .cmd 并改名即可，内容不用动
+copy <repo>\windows\ccr-claude.cmd <repo>\windows\myclaude.cmd
+```
+
+别名能工作，是因为 `.cmd` 用 `%~n0` 把自己的调用名通过 `CCR_INVOKED_AS` 交给
+启动器，帮助和报错都以它自称；找不到同目录的 `ccr-claude.ps1` 时还可以用
+`CCR_CLAUDE_PS1` 指过去。
+
+**状态不跟着名字走**：上次的 profile、`--settings` 覆盖层、安装备份都固定在
+`ccr-claude` 名下，所以改叫 `myclaude` 之后，之前记住的 profile 还在。多个
+别名共用同一份状态。
+
 ## 用法
 
 ```bat

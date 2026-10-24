@@ -56,6 +56,26 @@
 # -ProfileId，claude 自己的 -p / --model / --continue 就会被抢走。
 $ErrorActionPreference = 'Stop'
 
+# 命令名就是被调用的名字：`myclaude.cmd` 转进来时 $InvokedName 是 myclaude，
+# 帮助和报错都用它自称。状态目录、覆盖层、备份文件仍然固定在 ccr-claude 下，
+# 改名不会丢用户记住的 profile。要早于参数循环定义：循环里的报错也用得上。
+#
+# 通过 .cmd 启动时，-File 让 $MyInvocation.InvocationName 变成 .ps1 的完整
+# 路径，所以 .cmd 先用 CCR_INVOKED_AS 把 %~n0 传进来。读走就删，别让它跟着
+# claude 子进程跑。
+$InvokedName = $env:CCR_INVOKED_AS
+if ($env:CCR_INVOKED_AS) { Remove-Item Env:CCR_INVOKED_AS -ErrorAction SilentlyContinue }
+if (-not $InvokedName) {
+    $raw = $MyInvocation.InvocationName
+    if ($raw -and $raw -notin '.', '&') {
+        $InvokedName = [IO.Path]::GetFileNameWithoutExtension($raw)
+    }
+}
+if (-not $InvokedName) {
+    $InvokedName = [IO.Path]::GetFileNameWithoutExtension($PSCommandPath)
+}
+if (-not $InvokedName) { $InvokedName = 'ccr-claude' }
+
 $ProfileId = $env:CCR_PROFILE
 $ModelName = ''
 # 字符串而不是 [int]：--context-window off 也得能传，它表示"什么都别设"。
@@ -76,7 +96,7 @@ while ($i -lt $args.Count) {
         '^--context-window$' {
             $ContextWindow = [string]$args[++$i]
             # 这里还不能用 Stop-With：函数定义在参数循环之后才执行到。
-            if (-not $ContextWindow) { [Console]::Error.WriteLine("ccr-claude: missing --context-window value"); exit 1 }
+            if (-not $ContextWindow) { [Console]::Error.WriteLine("${InvokedName}: missing --context-window value"); exit 1 }
             break
         }
         '^--context-window=(.*)$' { $ContextWindow = $Matches[1]; break }
@@ -91,12 +111,14 @@ while ($i -lt $args.Count) {
 }
 
 if ($ShowHelp) {
+    Write-Host "Usage: $InvokedName [options] [-- claude-args]"
+    Write-Host ""
     Get-Help $PSCommandPath -Detailed
     exit 0
 }
 
 function Write-Note([string]$Msg) { [Console]::Error.WriteLine($Msg) }
-function Stop-With([string]$Msg) { Write-Note "ccr-claude: $Msg"; exit 1 }
+function Stop-With([string]$Msg) { Write-Note "${InvokedName}: $Msg"; exit 1 }
 
 # CCR 里 Provider/model 这种长名，Claude Code 只认最后一段、去掉 [1m] 后缀。
 function ConvertTo-ShortModel([string]$M) {
@@ -794,7 +816,7 @@ elseif ($ContextWindow -eq 'off' -or $env:CCR_CONTEXT_WINDOW -eq 'off') {
     Remove-Item Env:CLAUDE_CODE_MAX_CONTEXT_TOKENS -ErrorAction SilentlyContinue
 }
 elseif ($ContextWindow -and $ContextWindow -notmatch '^0+$') {
-    [Console]::Error.WriteLine("ccr-claude: --context-window takes a token count or 'off', got `"$ContextWindow`"")
+    [Console]::Error.WriteLine("${InvokedName}: --context-window takes a token count or 'off', got `"$ContextWindow`"")
     exit 1
 }
 elseif ($env:CCR_CONTEXT_WINDOW -match '^\d+$') {
@@ -857,7 +879,7 @@ try {
     $PassArgs.Insert(0, '--settings')
 }
 catch {
-    Write-Note "ccr-claude: could not write the --settings overlay: $($_.Exception.Message)"
+    Write-Note "${InvokedName}: could not write the --settings overlay: $($_.Exception.Message)"
     Write-Note "  Keys of the same name in settings.json may override this run."
 }
 

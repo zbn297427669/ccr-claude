@@ -39,6 +39,19 @@ chmod +x start-claude.sh
 ln -sfn "$(pwd)/start-claude.sh" ~/.local/bin/ccr-claude
 ```
 
+### 换个名字调用
+
+命令名就是链接名，脚本里没有写死：
+
+```bash
+ln -sfn "$(pwd)/start-claude.sh" ~/.local/bin/myclaude
+myclaude --help          # 输出里自称 myclaude
+```
+
+下次 `ln -sfn` 到哪个名字，`--help` 就用哪个名字自称。状态不跟着名字走：上次
+的 profile 固定在 `${XDG_CONFIG_HOME:-~/.config}/ccr-claude/last-profile`，多个
+别名共用同一份，改名不会丢。
+
 依赖：`bash`、`python3`、PATH 中的 `claude`，以及已启动的 CCR 网关。
 
 ## 用法
