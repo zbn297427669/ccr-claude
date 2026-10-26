@@ -137,14 +137,18 @@ function ConvertTo-ShortModel([string]$M) {
 # 而 "128K" 既准又短。四舍五入过的值前面加 "~"。
 function Format-WindowLabel([string]$N) {
     if ($N -notmatch '^\d+$') { return '' }
-    $n = [long]$N
-    if ($n -ge 1000000) {
-        $m = [long][Math]::Round($n / 100000.0, 0, [MidpointRounding]::AwayFromZero)
-        $approx = if ($m * 100000 -ne $n) { '~' } else { '' }
+    # 局部变量不能叫 $n：PowerShell 的变量名不区分大小写，$n 就是参数 $N，
+    # 而 $N 已被 [string] 约束，赋值 [long] 会被立刻转回字符串。之后
+    # `"32768" -ge 1000000` 是**字符串比较**（'3' > '1'），32768 也判成百万以上，
+    # 于是每个窗口都显示成 "~0.0M"。
+    $tokens = [long]$N
+    if ($tokens -ge 1000000) {
+        $m = [long][Math]::Round($tokens / 100000.0, 0, [MidpointRounding]::AwayFromZero)
+        $approx = if ($m * 100000 -ne $tokens) { '~' } else { '' }
         return ('{0}{1}.{2}M' -f $approx, [Math]::Floor($m / 10), ($m % 10))
     }
-    $k = [long][Math]::Round($n / 1000.0, 0, [MidpointRounding]::AwayFromZero)
-    $approx = if ($k * 1000 -ne $n) { '~' } else { '' }
+    $k = [long][Math]::Round($tokens / 1000.0, 0, [MidpointRounding]::AwayFromZero)
+    $approx = if ($k * 1000 -ne $tokens) { '~' } else { '' }
     return ('{0}{1}K' -f $approx, $k)
 }
 
