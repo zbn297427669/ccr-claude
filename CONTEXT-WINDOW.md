@@ -254,7 +254,13 @@ set CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000
 
 1. **CCR 存储的 `modelMetadata.contextWindow`** —— CCR 上次探测的结果
 2. **供应商的 `/v1/models`** —— 仅当它是本机回环地址。单模型端点直接采信
-   （本地引擎常见：CCR 里叫 `bonsai-v3`，实际答 `bonsai-heretic`）
+   （本地引擎常见：CCR 里叫 `bonsai-v3`，实际答 `bonsai-heretic`）。
+   端点返回的窗口字段有五种形状，`window_of()` 全部试一遍：
+   平铺的 `context_window` / `contextWindow` / `max_context_window` /
+   `max_model_len`、嵌套的 `limits.contextTokens`（CCR 自带目录的形状），
+   以及嵌套的 **`meta.n_ctx`**（llama.cpp 系：Strata 的服务器答
+   `{"id":…,"meta":{"n_ctx":32768}}`，ninfer 的 ring 构建同理。
+   ninfer 自己的 `lib/engine-status.ps1` 也是三种都读）
 3. **CCR 自带的总 catalog** `models.json`，读 `limits.contextTokens`
    （`limits.inputTokens` 兜底）。同名对上多条时要求一致：差 10% 以内算同一个
    模型、取小值（只会提前压缩，不会滞后）；差更多说明这名字真是两个东西，
