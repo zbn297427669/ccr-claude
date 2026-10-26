@@ -22,6 +22,15 @@ context is `MAX − 20000` (output reserve), and that version has no 800000 cap.
   never set, so Claude Code fell back to its 128000/200000 default.
   Both launchers, same change; a shape that already resolved is untouched.
 
+- **The model menu printed `~0.0M` for every window.** `Format-WindowLabel`
+  declared `[string]$N` and then did `$n = [long]$N`. PowerShell variable names
+  are case-insensitive, so `$n` *was* `$N`: the parameter's `[string]` type
+  constraint turned the `[long]` straight back into a string. The following
+  `$n -ge 1000000` then compared strings — `"32768" -ge "1000000"` is `'3' > '1'`
+  — so every window took the millions branch and rendered as `~0.0M`. The local
+  is now `$tokens`. This was latent until a `meta.n_ctx` model started resolving:
+  before that the value was `unknown` and the formatter never ran.
+
 ## [0.2.0] - 2026-10-24
 
 ### Added
