@@ -8,6 +8,20 @@ context is `MAX − 20000` (output reserve), and that version has no 800000 cap.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A model that reports its window as `meta.n_ctx` now resolves instead of
+  showing `unknown`.** `window_of()` read flat fields (`context_window`,
+  `contextWindow`, `max_context_window`, `max_model_len`) and CCR's `limits`
+  object, but not the nested `meta` one. Servers of the llama.cpp family put it
+  there — Strata's `/v1/models` answers
+  `{"id": "...", "meta": {"n_ctx": 32768}}` — and ninfer's *ring* builds do the
+  same, which its own launcher already handles (`lib/engine-status.ps1` tries
+  `context_window`, then `max_model_len`, then `meta.n_ctx`). With no value
+  resolved, the menu said `unknown` and `CLAUDE_CODE_MAX_CONTEXT_TOKENS` was
+  never set, so Claude Code fell back to its 128000/200000 default.
+  Both launchers, same change; a shape that already resolved is untouched.
+
 ## [0.2.0] - 2026-10-24
 
 ### Added

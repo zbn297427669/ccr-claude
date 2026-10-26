@@ -293,6 +293,9 @@ try:
         def window_of(entry):
             # 平面字段是端点返回的形状；limits 是 CCR 自带目录的形状 ——
             # 以前只认平面字段，于是那个目录一条都没匹配上。
+            # meta.n_ctx 是 llama.cpp 系的形状（Strata 的服务器返回
+            # {"id":…,"meta":{"n_ctx":32768}}），ninfer 的 ring 构建也用它 ——
+            # ninfer 自己的启动器三种都读，这里漏了它，那些引擎就解析不到窗口。
             for f in ("context_window", "contextWindow",
                       "max_context_window", "max_model_len"):
                 v = to_int(entry.get(f))
@@ -301,6 +304,9 @@ try:
             lim = entry.get("limits")
             if isinstance(lim, dict):
                 return to_int(lim.get("contextTokens")) or to_int(lim.get("inputTokens"))
+            meta = entry.get("meta")
+            if isinstance(meta, dict):
+                return to_int(meta.get("n_ctx")) or to_int(meta.get("context_length"))
             return None
 
         # CCR 对没有元数据的模型一律写 128000（bundle 里 KFe=128e3）。那是它的

@@ -614,7 +614,11 @@ def window_of(entry):
 
     Flat fields are what an endpoint returns. `limits` is what CCR's shipped
     catalog uses -- and that catalog had been read with the flat-field loop
-    alone, so this branch never matched a single entry.
+    alone, so this branch never matched a single entry. `meta.n_ctx` is the
+    llama.cpp-family shape (Strata's server answers
+    {"id": ..., "meta": {"n_ctx": 32768}}), and ninfer's ring builds use it
+    too -- ninfer's own launcher reads all three, which is why leaving it out
+    here made every such engine resolve to nothing.
     """
     for f in ("context_window", "contextWindow", "max_context_window",
               "max_model_len"):
@@ -624,6 +628,9 @@ def window_of(entry):
     lim = entry.get("limits")
     if isinstance(lim, dict):
         return to_int(lim.get("contextTokens")) or to_int(lim.get("inputTokens"))
+    meta = entry.get("meta")
+    if isinstance(meta, dict):
+        return to_int(meta.get("n_ctx")) or to_int(meta.get("context_length"))
     return None
 
 
