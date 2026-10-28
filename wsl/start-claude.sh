@@ -940,9 +940,14 @@ pick_profile() {
 # A piped run, a -p run, or a single-model profile all take the default without
 # asking: a prompt in a script is a hang, and a menu of one is noise.
 #
-# The list comes from the profile's availableModels, which is also what CCR's
-# gateway enforces -- so anything offered here is something the gateway will
-# accept. The current model is first, so pressing Enter keeps today's behaviour.
+# The list starts from the profile's availableModels, but that field is history:
+# deleting a provider or renaming its models in CCR does not rewrite it, so it
+# keeps offering models the gateway no longer serves. It is reconciled against
+# the gateway's /v1/models (which is filtered by the client key, so it is the
+# authoritative list for this profile) before the menu is drawn. When the
+# gateway cannot be reached the list is used as-is: preflight reports that
+# properly, and a reconciliation failure must never block startup.
+# The current model is first, so pressing Enter keeps today's behaviour.
 #
 # Each row carries the model's own context window, because the choice is
 # otherwise made blind: two models 4x apart in context look identical in a list
@@ -985,6 +990,9 @@ pick_model() {
     done
   fi
 
+  # Reconcile with the gateway only when the menu is really going to be shown.
+  sync_available_models
+
   local -A win_of=()
   while IFS=$'\t' read -r long win_label; do
     [[ -n "$long" ]] || continue
@@ -1020,6 +1028,83 @@ pick_model() {
       return 0
     fi
     echo "Invalid number, try again." >&2
+  done
+}
+
+# Trim pick_model's arrays down to the models the gateway actually offers.
+#
+# availableModels in CCR's config is append-only in practice: remove a provider
+# from the Providers list and the profile keeps advertising its models. Such an
+# entry cannot be launched -- the gateway answers model_not_found -- so it has no
+# business being in a menu. /v1/models is keyed to the client token, which makes
+# it the list of what this profile can really run.
+#
+# Best-effort by design: no curl, gateway down, timeout, or a shape we do not
+# recognise all leave the list untouched. Preflight already reports a gateway
+# that is genuinely unreachable; failing here first would only report it twice.
+sync_available_models() {
+  command -v curl >/dev/null 2>&1 || return 0
+  [[ -n "${CCR_BASE_URL:-}" && -n "${TOKEN:-}" ]] || return 0
+
+  local body live kept=() dropped=()
+  body="$(mktemp)"
+  if ! curl -fsS -m 4 -H "Authorization: Bearer ${TOKEN}" \
+       "${CCR_BASE_URL}/v1/models" -o "$body" 2>/dev/null; then
+    rm -f "$body"
+    return 0
+  fi
+  # One id per line. python3 is already a hard requirement of this launcher, and
+  # it parses JSON correctly where grep/sed would trip over escaped strings.
+  live="$(python3 - "$body" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+for m in data.get("data") or []:
+    mid = m.get("id") if isinstance(m, dict) else None
+    if isinstance(mid, str) and mid.strip():
+        # The gateway may annotate an id with a window suffix, e.g. "[1m]".
+        print(mid.split("[", 1)[0].strip())
+PY
+)"
+  rm -f "$body"
+  [[ -n "$live" ]] || return 0
+
+  local m base
+  for m in "${longs[@]}"; do
+    base="${m%%\[*}"
+    base="${base%"${base##*[![:space:]]}"}"
+    if grep -Fxq -- "$base" <<<"$live"; then
+      kept+=("$m")
+    else
+      dropped+=("$m")
+    fi
+  done
+  [[ ${#dropped[@]} -eq 0 ]] && return 0
+
+  # Never drop the current model: Enter means "keep what the profile says", and
+  # changing it is CCR's job, not the launcher's. Say it out loud instead, so a
+  # stale profile model is not mistaken for the launcher picking wrong.
+  local current="${longs[0]}" current_live=0
+  for m in "${kept[@]+"${kept[@]}"}"; do
+    [[ "$m" == "$current" ]] && current_live=1
+  done
+  if [[ $current_live -eq 0 ]]; then
+    echo "warning: the profile's model \"${current}\" is not offered by the gateway; keeping it, but it may fail." >&2
+    kept=("$current" "${kept[@]+"${kept[@]}"}")
+  fi
+
+  local list="${dropped[0]}"
+  for m in "${dropped[@]:1}"; do list+=", ${m}"; done
+  printf 'dropped %d stale model(s) not offered by the gateway: %s\n' \
+    "${#dropped[@]}" "$list" >&2
+
+  longs=("${kept[@]}")
+  shorts=()
+  for m in "${longs[@]}"; do
+    m="${m##*/}"
+    shorts+=("${m%%\[*}")
   done
 }
 

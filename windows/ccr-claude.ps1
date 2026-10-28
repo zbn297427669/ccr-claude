@@ -130,6 +130,40 @@ function ConvertTo-ShortModel([string]$M) {
     return $M
 }
 
+# profile 的 availableModels 是 CCR 记下的**历史**清单：在 CCR 里删掉一个供应商
+# 或改掉它的模型，这个字段不会跟着变，菜单照着列就会给出网关其实不接受的选项
+# （选了以 404 / model_not_found 告终）。网关的 /v1/models 才是准入事实——它按
+# client key 过滤，返回的就是这个 profile 真正能用的模型。
+#
+# 所以这里拿 availableModels 和网关对一次账，只保留网关认的那些。失败就原样返回：
+# 网关没起来、超时、key 无效都由后面的预检统一报错，不必在这里重复；对账只是
+# 锦上添花，绝不能因为它连不上就阻断启动。
+function Sync-AvailableModels([string[]]$Models, [string]$BaseUrl, [string]$Token) {
+    if (-not $Models -or $Models.Count -eq 0) { return $Models }
+    if (-not $BaseUrl -or -not $Token) { return $Models }
+    try {
+        $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 4 -Uri "$BaseUrl/v1/models" `
+            -Headers @{ Authorization = "Bearer $Token" } -ErrorAction Stop
+        if ($r.StatusCode -ne 200) { return $Models }
+        $payload = $r.Content | ConvertFrom-Json
+        $live = @($payload.data | ForEach-Object { $_.id } | Where-Object { $_ })
+    }
+    catch { return $Models }
+    if ($live.Count -eq 0) { return $Models }
+
+    # 网关的 id 可能带 [1m] 之类的后缀标注，比较时去掉。
+    $liveSet = @{}
+    foreach ($m in $live) { $liveSet[($m -replace '\[[^\]]*\]$', '').Trim()] = $true }
+
+    $kept = @($Models | Where-Object { $liveSet.ContainsKey(($_ -replace '\[[^\]]*\]$', '').Trim()) })
+    $dropped = @($Models | Where-Object { -not $liveSet.ContainsKey(($_ -replace '\[[^\]]*\]$', '').Trim()) })
+    if ($dropped.Count -gt 0) {
+        Write-Note ("dropped {0} stale model(s) not offered by the gateway: {1}" -f `
+            $dropped.Count, (($dropped | ForEach-Object { ConvertTo-ShortModel $_ }) -join ', '))
+    }
+    return $kept
+}
+
 # 窗口在菜单里写成什么。
 #
 # 百万以上给一位小数的 M —— 正好是 100K 一步，够分清 1.0M 和 1.1M，
@@ -625,6 +659,15 @@ else {
 
 $ProfileId = $Chosen.id
 
+# ---------------------------------------------------------------- 取密钥
+# 必须在选模型之前：profiles 里的 availableModels 是 CCR 记下的旧清单，删掉的
+# 供应商和模型会一直留在里面，菜单照着它列就会给出网关其实不接受的选项。对账
+# 要拿这个 profile 自己的 client key 去问网关，所以密钥先拿到手。
+$Token = ((Invoke-CcrPy $PyProfiles @($CcrDir, 'token', $ProfileId)) -join '').Trim()
+if (-not $Token) {
+    Stop-With "profile `"$ProfileId`" has no plaintext client key. Re-save that agent in CCR."
+}
+
 # ---------------------------------------------------------------- 选模型
 # 用户可能给的是 CCR 的 XM/xxx，也可能直接抄了网关缓存里的 anthropic/claude-ccr-h<hex>。
 # 先把后者还原成 CCR 认识的名字，否则查不到供应商，窗口也就无从解析。
@@ -635,8 +678,9 @@ if (-not $RawModel) {
     $ModelSource = 'profile'
 
     # profile 里还配了别的模型时给个菜单。列表来自 CCR 的 availableModels，
-    # 它同时是网关的准入清单——菜单里列出来的网关一定接受。当前模型排第一，
-    # 直接回车就是保持现状。
+    # 但那是历史清单，要先和网关的 /v1/models 对账，去掉已经删掉的供应商和
+    # 模型——否则菜单会给出网关不接受的选项。当前模型排第一，直接回车就是
+    # 保持现状。
     #
     # 什么都不问的四种情况（和 start-claude.sh 的 pick_model 一致）：只有一个
     # 模型、stdin 不是终端、CCR_NO_PICK=1、转发参数里有 -p。最后一条最要紧：
@@ -652,6 +696,20 @@ if (-not $RawModel) {
         foreach ($pa in $PassArgs) {
             if ($pa -eq '-p' -or $pa -eq '--print') { $Ask = $false; break }
         }
+    }
+
+    # 只在真要弹菜单时才对账：不问就不值得为它多打一次网关。
+    if ($Ask) {
+        $Synced = @(Sync-AvailableModels $Avail $BaseUrl $Token)
+        # 当前模型总是留在第一位，即使网关没列它——回车等于保持现状，而且真要
+        # 换掉它是 CCR 里的事，不是启动器该替用户做的。但它确实是陈旧的话，
+        # 得说出来，否则用户会以为是启动器挑错了模型。
+        if ($Synced -notcontains $Chosen.model) {
+            Write-Note "warning: the profile's model `"$($Chosen.model)`" is not offered by the gateway; keeping it, but it may fail."
+            $Avail = @($Chosen.model) + @($Synced | Where-Object { $_ })
+        }
+        else { $Avail = @($Synced) }
+        if ($Avail.Count -le 1) { $Ask = $false }
     }
 
     if ($Ask) {
@@ -699,12 +757,6 @@ if (-not $RawModel) {
 $CcrModel = Expand-GatewayModel $RawModel
 if ($CcrModel -ne $RawModel) {
     $ModelSource = "$ModelSource, decoded to $CcrModel"
-}
-
-# ---------------------------------------------------------------- 取密钥
-$Token = ((Invoke-CcrPy $PyProfiles @($CcrDir, 'token', $ProfileId)) -join '').Trim()
-if (-not $Token) {
-    Stop-With "profile `"$ProfileId`" has no plaintext client key. Re-save that agent in CCR."
 }
 
 # ---------------------------------------------------------------- 预检
