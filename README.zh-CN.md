@@ -35,7 +35,8 @@
 ├── .github/workflows/
 │   └── check.yml        两个启动器内嵌代码的语法检查
 ├── tools/
-│   └── check.py         同一套检查，本地可跑
+│   ├── check.py         同一套检查，本地可跑
+│   └── release.py       发版：检查、打 tag、构建、验证
 ├── windows/
 │   ├── ccr-claude.ps1   正式入口
 │   ├── ccr-claude.cmd   双击 / cmd 用的薄壳
@@ -54,6 +55,34 @@
 python3 -I tools/check.py --verbose
 ```
 
+## 前置要求
+
+这个项目是**启动器**，不是安装器。它假定下面三样东西已经在你机器上：
+
+| 需要什么 | 为什么 | 怎么装 |
+| --- | --- | --- |
+| **运行中的 CCR 网关** | 启动器从它的 `config.sqlite` 里读 profile、密钥、模型和窗口 | [CCR Desktop 下载](https://github.com/musistudio/claude-code-router/releases) |
+| **一个已启用的 Claude Code Agent** | 只列「已启用 + 有模型 + 有明文 client key」的 profile | 在 CCR 里加供应商 → 启用 Claude Code Agent |
+| **`python3`（带 `sqlite3`）** | PowerShell 和 bash 都没有内置 SQLite，启动器借 python 读库 | Windows：`winget install Python.Python.3.12`<br>WSL/Linux：`sudo apt install python3` |
+
+外加官方的 `claude` CLI 本身（Windows 也可用 `winget install Anthropic.ClaudeCode`）。
+
+两点容易踩的：
+
+- **`python3` 是硬依赖，不是可选项。** 少了它启动器直接退出并报
+  `no python on PATH`。Microsoft Store 的那个 `python` 存根**不行**——启动器会主动跳过
+  `%LOCALAPPDATA%\Microsoft\WindowsApps\` 下的它（没装 Python 时它弹商店然后静默退出）。
+- **厂商 API Key 只有你自己有。** 没有任何脚本能替你在 CCR 里填。所以「一键部署」的
+  终点是装好启动器，然后你去 CCR 里填 key。
+
+Windows 上的 `install.ps1` 会替你检查前三项，缺什么直接打印对应的安装命令。
+
+**Claude Code 下载**：官方源 `https://claude.ai/install.ps1`。若官方源不可达，可先用
+镜像 `https://github.com/ProjectAILeap/claude-code-releases`（每 4 小时同步官方二进制，
+release 里附 `sha256sums.txt`）。镜像的校验和只能证明「下载没损坏、与该 tag 自洽」，
+不能证明上游未被改动；能访问官方源时建议对照官方
+`https://downloads.claude.ai/claude-code-releases/<版本>/manifest.json` 的 `checksum`。
+
 ## 快速开始
 
 **Windows**（PowerShell）——仓库 clone 到本地盘，然后：
@@ -65,6 +94,10 @@ python3 -I tools/check.py --verbose
 
 第二条会把 `windows\` 加进用户 PATH，把 `CCR_CLAUDE_EXE` 指向 `claude.exe`
 实际所在的位置（不必和脚本同目录），并在写入前备份这两项原值。
+
+试运行会先打印一段 **Preflight**，逐项报告 python、CCR 数据目录、网关是否就绪；
+缺失项标 `!` 并给出修复命令。它**只报告、不中断**——先装启动器、后配 CCR 也是
+合法顺序。确认环境齐备后再加 `-Apply`。
 
 ```bat
 ccr-claude                      :: 多个 enabled Agent 时选 profile

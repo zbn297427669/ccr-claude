@@ -36,6 +36,43 @@ a hand-copied launcher. The originals are saved to
 `%LOCALAPPDATA%\ccr-claude\install-backup-<timestamp>.txt` before anything is
 written.
 
+### Preflight
+
+Both forms print a **Preflight** block first, and it is the part worth reading:
+
+```
+Preflight (what the launcher needs at run time):
+  ok   python with sqlite3: C:\Python312\python.exe
+  ok   CCR data dir: C:\Users\me\AppData\Roaming\claude-code-router
+  ! CCR gateway not reachable at http://127.0.0.1:3456 -- start CCR before using the launcher.
+       fix: open CCR Desktop, enable the gateway, confirm the Claude Code agent
+```
+
+It checks the three things the launcher needs at run time — python with
+`sqlite3`, a CCR data directory, a reachable gateway — and names the command
+that fixes each gap. It deliberately **reports rather than fails**: installing
+before CCR is configured is a legitimate order of operations, and a hard error
+would also break the dry run. Pass `-SkipChecks` to turn it off.
+
+The python probe uses the same rule as the launcher: anything under
+`%LOCALAPPDATA%\Microsoft\WindowsApps\` is skipped, because that is the Store
+stub, and a real interpreter is confirmed with an `import sqlite3` probe. Without
+python the gateway port cannot be read either, so that check is simply omitted
+rather than guessed at 3456.
+
+### `irm ... | iex` does not work
+
+The script locates the repo from `$PSScriptRoot`, which is empty when the script
+did not come from a file. Piped in, it exits with
+
+```
+ccr-claude: cannot locate the repo: this script was piped in, so there is no script
+directory. Pass the repo root explicitly, e.g. -RepoPath 'C:\tools\ccr-claude'.
+```
+
+So either clone and run the file, or pass `-RepoPath` explicitly. Worth knowing
+before publishing an `irm | iex` line: it will not do what the reader expects.
+
 It refuses a UNC path (`\\wsl.localhost\...`): `RemoteSigned` will not run a
 `.ps1` from one, so installing from there produces a launcher that fails at
 startup. The repo has to live on a local drive.

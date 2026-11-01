@@ -39,6 +39,38 @@
 `claude.exe`、把 PATH 上还留着旧手抄脚本的目录摘掉。写入前会把原值备份到
 `%LOCALAPPDATA%\ccr-claude\install-backup-<时间>.txt`。
 
+### 前置检查（Preflight）
+
+试运行和 `-Apply` 都会先打印一段 **Preflight**，这段才是重点：
+
+```
+Preflight (what the launcher needs at run time):
+  ok   python with sqlite3: C:\Python312\python.exe
+  ok   CCR data dir: C:\Users\me\AppData\Roaming\claude-code-router
+  ! CCR gateway not reachable at http://127.0.0.1:3456 -- start CCR before using the launcher.
+       fix: open CCR Desktop, enable the gateway, confirm the Claude Code agent
+```
+
+它检查启动器运行时真正需要的三样：带 `sqlite3` 的 python、CCR 数据目录、可达的
+网关，每处缺口都给出修复命令。它**只报告、不中断**——先装启动器、后配 CCR 是合法
+顺序，硬报错也会把试运行一起弄坏。不想看就传 `-SkipChecks`。
+
+python 的判定规则和启动器一致：`%LOCALAPPDATA%\Microsoft\WindowsApps\` 下的一律
+跳过（那是商店存根），并用 `import sqlite3` 实测确认是真解释器。没有 python 时
+网关端口也读不出来，这一项就直接略过，而不是猜一个 3456。
+
+### `irm ... | iex` 跑不了
+
+脚本靠 `$PSScriptRoot` 定位仓库，而经管道传入时它是空的。这样调用会以
+
+```
+ccr-claude: cannot locate the repo: this script was piped in, so there is no script
+directory. Pass the repo root explicitly, e.g. -RepoPath 'C:\tools\ccr-claude'.
+```
+
+退出。所以要么 clone 下来跑文件，要么显式传 `-RepoPath`。要发布 `irm | iex`
+一行命令之前最好先知道这一点：它不会像读者预期的那样工作。
+
 它会拒绝 UNC 路径（`\\wsl.localhost\...`）：RemoteSigned 策略下 `.ps1` 在那儿
 根本跑不起来，装上去只会得到一个启动就失败的安装。
 

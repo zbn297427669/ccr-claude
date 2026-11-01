@@ -12,3 +12,7 @@ Thumbs.db
 # Python bytecode: never useful in git, and it is platform/version specific.
 __pycache__/
 *.pyc
+
+# Release artifacts from tools/release.py. They are rebuilt from the tag on
+# demand; keeping them in git would mean two copies of the same bytes drifting.
+/dist/

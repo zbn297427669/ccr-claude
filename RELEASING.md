@@ -30,6 +30,17 @@ drive, plus `CCR_CLAUDE_EXE` pointing at wherever `claude.exe` lives.
 
 ## Cutting a release
 
+The steps below are what `tools/release.py` runs, in this order. The script
+exists because every one of them is skippable by a person in a hurry — most
+expensively the CRLF verification in step 3, which is what the raw-link incident
+taught us to check. Use the script; read this section when it fails.
+
+```bash
+python3 -I tools/release.py --dry-run   # check everything, build nothing
+python3 -I tools/release.py             # build dist/, tag locally, push nothing
+python3 -I tools/release.py --publish   # also push the tag and create the release
+```
+
 1. **Checks pass on a clean checkout.**
 
    ```bash
@@ -41,12 +52,14 @@ drive, plus `CCR_CLAUDE_EXE` pointing at wherever `claude.exe` lives.
 
 2. **Update the changelog and the version-labelled docs together.** See
    `CHANGELOG.md`; the comparison links at the bottom name the tag, so they need
-   the new tag to exist on the remote before they resolve.
+   the new tag to exist on the remote before they resolve. `release.py` refuses
+   to run when a heading has no link, or a released version still compares
+   against `HEAD`.
 
 3. **Build the two artifacts from the tag, not from a working tree.**
 
    ```bash
-   VERSION=v0.2.0
+   VERSION=v0.2.1
    git tag -a "$VERSION" -m "ccr-claude $VERSION"
    git push origin "$VERSION"
 
@@ -67,6 +80,9 @@ drive, plus `CCR_CLAUDE_EXE` pointing at wherever `claude.exe` lives.
      "ccr-claude-$VERSION-windows/windows/ccr-claude.ps1" | grep -c $'\r'
    # must be non-zero, and equal to the file's line count
    ```
+
+   `release.py` runs this check itself, plus the BOM check and the same test on
+   `ccr-claude.cmd`, and refuses to publish when either fails.
 
 4. **Create the release** and attach both archives:
 

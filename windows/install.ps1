@@ -14,6 +14,9 @@
     - checks the repo is on a local drive (RemoteSigned refuses a .ps1 on a
       UNC path such as \\wsl.localhost\...),
     - checks claude.exe is where you say it is,
+    - checks the three things the launcher itself needs at run time -- python
+      with sqlite3, a CCR data directory, a reachable gateway -- and prints
+      what is missing together with the command that fixes it,
     - removes PATH entries that hold an old copy of the launcher,
     - adds this repo's windows\ directory,
     - sets CCR_CLAUDE_EXE.
@@ -40,6 +43,11 @@
   other than ccr-claude. The alias forwards to ccr-claude.ps1; state
   (last profile, overlay, backups) stays under ccr-claude either way.
 
+.PARAMETER SkipChecks
+  Do not probe the run-time prerequisites (python, CCR data dir, gateway).
+  You still have to start CCR and add a provider before the launcher works;
+  this only stops the installer from reporting it.
+
 .EXAMPLE
   .\install.ps1
   # shows what would change, touches nothing
@@ -49,6 +57,12 @@
 
 .EXAMPLE
   .\install.ps1 -ClaudeExe 'C:\path\to\claude' -Alias myclaude -Apply
+
+.EXAMPLE
+  irm https://example/install.ps1 | iex
+  # piped in, there is no file on disk and $PSScriptRoot is empty -- pass
+  # -RepoPath explicitly. Worth knowing before you publish an irm|iex line:
+  # the script refuses with that instruction instead of binding an empty path.
 #>
 [CmdletBinding()]
 param(
@@ -56,7 +70,8 @@ param(
     [string]$ClaudeExe,
     [switch]$Apply,
     [switch]$NoBackup,
-    [string]$Alias
+    [string]$Alias,
+    [switch]$SkipChecks
 )
 
 $ErrorActionPreference = 'Stop'
@@ -67,7 +82,15 @@ function Warn([string]$Msg) { Write-Host "  ! $Msg" -ForegroundColor Yellow }
 function Bad([string]$Msg) { Write-Host "ccr-claude: $Msg" -ForegroundColor Red; exit 1 }
 
 # ---------------------------------------------------------------- repo 检查
+# $PSScriptRoot is empty when the script did not come from a file -- `irm ... |
+# iex`, or a scriptblock built from text. Split-Path -Parent '' throws
+# ParameterBindingValidationException before any of our messages can run, so
+# say what to pass instead of failing at a binding error the user cannot read.
 if (-not $RepoPath) {
+    if (-not $PSScriptRoot) {
+        Bad ("cannot locate the repo: this script was piped in, so there is no script " +
+             "directory. Pass the repo root explicitly, e.g. -RepoPath 'C:\tools\ccr-claude'.")
+    }
     $RepoPath = Split-Path -Parent $PSScriptRoot
 }
 if (-not (Test-Path -LiteralPath $RepoPath -PathType Container)) {
@@ -121,6 +144,121 @@ elseif (Test-Path -LiteralPath $ClaudeExe -PathType Leaf) {
 }
 else {
     Bad "CCR_CLAUDE_EXE/claude.exe not found: $ClaudeExe"
+}
+
+# ---------------------------------------------------------------- 前置检查
+# The launcher reads CCR's SQLite database through python (PowerShell has no
+# SQLite), so a machine can install cleanly and still fail on first launch with
+# `no python on PATH`. These are warnings, not errors: installing before CCR is
+# configured is a legitimate order of operations, and `Bad` here would also
+# break the dry run. They are repeated in the plan below, and each names the
+# command that fixes it -- "missing python" alone sends people to the Store
+# stub, which Find-Python deliberately skips.
+#
+# Find-PythonForCheck duplicates Find-Python from ccr-claude.ps1 on purpose:
+# the launcher is a script, not a module, and dot-sourcing it would run it. Two
+# copies that can drift is the cost of keeping the launcher runnable on its own.
+# If the launcher's rule changes, change this one too -- the Windows job in
+# check.yml parses both files but cannot compare their meaning.
+function Find-PythonForCheck {
+    foreach ($n in @('python', 'python3', 'py')) {
+        $c = Get-Command $n -ErrorAction SilentlyContinue
+        if (-not $c -or -not $c.Source) { continue }
+        # Same WindowsApps exclusion as the launcher: those are Store stubs that
+        # open the Store and exit 9009 without running anything.
+        if ($c.Source -like '*\WindowsApps\*') { continue }
+        $probe = & $c.Source -c 'import sqlite3; print(1)' 2>$null
+        if ($LASTEXITCODE -eq 0 -and "$probe".Trim() -eq '1') { return $c.Source }
+    }
+    return $null
+}
+
+function Find-CcrDirForCheck {
+    if ($env:CCR_DIR -and (Test-Path -LiteralPath (Join-Path $env:CCR_DIR 'config.sqlite'))) {
+        return $env:CCR_DIR
+    }
+    $candidates = @()
+    if ($env:APPDATA) { $candidates += (Join-Path $env:APPDATA 'claude-code-router') }
+    if ($env:LOCALAPPDATA) { $candidates += (Join-Path $env:LOCALAPPDATA 'claude-code-router') }
+    $candidates += (Join-Path $HOME '.claude-code-router')
+    foreach ($c in $candidates) {
+        if ($c -and (Test-Path -LiteralPath (Join-Path $c 'config.sqlite'))) { return $c }
+    }
+    return $null
+}
+
+$PrereqNotes = @()   # each item: @{ Level; Text }
+$PythonExe = $null
+$CcrDir = $null
+$GatewayOk = $false
+
+if (-not $SkipChecks) {
+    $PythonExe = Find-PythonForCheck
+    if ($PythonExe) {
+        $PrereqNotes += @{ Level = 'ok'; Text = "python with sqlite3: $PythonExe" }
+    }
+    else {
+        $PrereqNotes += @{ Level = 'warn'; Text = "python with sqlite3 not found -- the launcher cannot read CCR's database without it." }
+        $PrereqNotes += @{ Level = 'fix';  Text = "winget install Python.Python.3.12   (then open a new terminal)" }
+    }
+
+    $CcrDir = Find-CcrDirForCheck
+    if ($CcrDir) {
+        $PrereqNotes += @{ Level = 'ok'; Text = "CCR data dir: $CcrDir" }
+    }
+    else {
+        $PrereqNotes += @{ Level = 'warn'; Text = "no CCR data dir (needs config.sqlite) -- install and run CCR Desktop first." }
+        $PrereqNotes += @{ Level = 'fix';  Text = "https://github.com/musistudio/claude-code-router/releases" }
+    }
+
+    # Probe the gateway only when there is a config to read a port from, and
+    # never fail on it: an unreachable gateway is the normal state before the
+    # user starts CCR, and the launcher has --skip-check for the same reason.
+    # The port lives in the same SQLite database, so only ask python for it when
+    # python exists. The snippet is a single-quoted here-string so PowerShell
+    # does not expand `$` inside it, and the closing `'@` must sit at column 0.
+    if ($CcrDir -and $PythonExe) {
+        $gwPort = 3456
+        $PortCode = @'
+import json, sqlite3, sys
+try:
+    con = sqlite3.connect('file:' + sys.argv[1] + '?mode=ro', uri=True)
+    row = con.execute("select value_json from app_config where key='default'").fetchone()
+    cfg = json.loads(row[0]) if row else {}
+    gw = cfg.get('gateway') or {}
+    print(gw.get('port') or cfg.get('PORT') or 3456)
+except Exception:
+    print(3456)
+'@
+        try {
+            # Temp file, not a pipe: `$Code | python -` goes through
+            # $OutputEncoding, and a GB2312 session corrupts the text. Same
+            # reason as the launcher's Invoke-CcrPy.
+            $portTmp = Join-Path ([IO.Path]::GetTempPath()) ("ccr-install-{0}.py" -f [Guid]::NewGuid().ToString('N'))
+            [IO.File]::WriteAllText($portTmp, $PortCode, (New-Object Text.UTF8Encoding($false)))
+            try {
+                $cfgText = & $PythonExe $portTmp (Join-Path $CcrDir 'config.sqlite') 2>$null
+            }
+            finally {
+                Remove-Item -LiteralPath $portTmp -Force -ErrorAction SilentlyContinue
+            }
+            if ("$cfgText".Trim() -match '^\d+$') { $gwPort = [int]"$cfgText".Trim() }
+        }
+        catch { }
+        $gwUrl = "http://127.0.0.1:$gwPort"
+        try {
+            $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri "$gwUrl/health" -ErrorAction Stop
+            if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) {
+                $GatewayOk = $true
+                $PrereqNotes += @{ Level = 'ok'; Text = "gateway reachable: $gwUrl" }
+            }
+        }
+        catch { }
+        if (-not $GatewayOk) {
+            $PrereqNotes += @{ Level = 'warn'; Text = "CCR gateway not reachable at $gwUrl -- start CCR before using the launcher." }
+            $PrereqNotes += @{ Level = 'fix';  Text = "open CCR Desktop, enable the gateway, confirm the Claude Code agent" }
+        }
+    }
 }
 
 # ---------------------------------------------------------------- 算 PATH 差异
@@ -184,6 +322,19 @@ Say "repo     $RepoPath"
 Say "launcher $Ps1"
 Say "exe      $ExeFile"
 Say "exe dir  $ExeDir"
+Say ''
+if ($SkipChecks) {
+    Say "Preflight skipped (-SkipChecks)."
+} elseif ($PrereqNotes.Count -gt 0) {
+    Say "Preflight (what the launcher needs at run time):"
+    foreach ($n in $PrereqNotes) {
+        switch ($n.Level) {
+            'ok'   { Note "ok   $($n.Text)" }
+            'warn' { Warn $n.Text }
+            'fix'  { Note "     fix: $($n.Text)" }
+        }
+    }
+}
 Say ''
 Say "Plan for the user PATH:"
 if ($alreadyHas) {

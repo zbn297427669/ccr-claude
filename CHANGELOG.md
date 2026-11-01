@@ -6,9 +6,45 @@ describes a set of behaviours, and the two files must agree on them.
 The window figures were measured against **Claude Code 2.1.310**. Effective
 context is `MAX − 20000` (output reserve), and that version has no 800000 cap.
 
-## [Unreleased]
+## [0.2.1] - 2026-11-01
+
+### Added
+
+- **`install.ps1` runs a preflight on the three run-time prerequisites.**
+  It reports python-with-`sqlite3`, the CCR data directory, and a reachable
+  gateway, and prints the command that fixes each gap. The python rule is the
+  launcher's: `%LOCALAPPDATA%\Microsoft\WindowsApps\` is skipped as a Store stub,
+  and a real interpreter is confirmed with `import sqlite3`. It reports rather
+  than fails — installing before CCR is configured is a legitimate order — and
+  `-SkipChecks` turns it off. The gateway port is read from `config.sqlite`, so
+  that check is omitted when python is absent instead of guessing 3456.
+
+- **A `Prerequisites` section in both top-level READMEs.** It names the running
+  gateway, an enabled agent, and python-with-`sqlite3`, and says which of them
+  cannot be automated (provider API keys). It also gives the official Claude Code
+  installer, and a mirror for users who cannot reach it, with the trust boundary
+  of a mirror's checksums stated.
+
+- **`tools/release.py` cuts a release in one command.** `./RELEASING.md`
+  described the process in prose and every step was one a person could skip —
+  the checks, the archive range that includes `CONTEXT-WINDOW.md`, and the CRLF
+  verification. The script runs them in order, refuses to build on a dirty tree
+  or a stale changelog link, tags locally by default, and only pushes and calls
+  `gh release create` under `--publish`. `tools/check.py` now compiles it too.
+
+- **`v0.2.1` is the first tag.** `0.1.0` and `0.2.0` were written up from the
+  commit history and never got tags, so their changelog links pointed at
+  comparisons that did not resolve. Those two now link to commit ranges; the
+  `Unreleased`/`HEAD` link is gone.
 
 ### Fixed
+
+- **`install.ps1` piped in (`irm ... | iex`) died on a binding error.** It read
+  `$PSScriptRoot`, which is empty when the script did not come from a file, so
+  `Split-Path -Parent ''` threw `ParameterBindingValidationException` before any
+  of the script's own messages could run. It now exits with an instruction to
+  pass `-RepoPath`, so publishing an `irm | iex` line fails legibly instead of
+  with a message the reader cannot act on.
 
 - **A model that reports its window as `meta.n_ctx` now resolves instead of
   showing `unknown`.** `window_of()` read flat fields (`context_window`,
@@ -30,6 +66,19 @@ context is `MAX − 20000` (output reserve), and that version has no 800000 cap.
   — so every window took the millions branch and rendered as `~0.0M`. The local
   is now `$tokens`. This was latent until a `meta.n_ctx` model started resolving:
   before that the value was `unknown` and the formatter never ran.
+
+- **The model menu offered models the gateway had already dropped.** CCR's
+  `availableModels` is history, not a live list: deleting a provider or renaming
+  its models does not rewrite it, so picking a stale entry failed with
+  `model_not_found`. Both launchers now compare the profile's list against
+  `/v1/models` — filtered by the client key, so it is the authoritative
+  per-profile list — and drop what the gateway no longer offers. The Windows
+  launcher had to fetch its token before the menu instead of after; on WSL it
+  was already available. The current model is never dropped even when it looks
+  stale: Enter means "keep what the profile says", and changing it is CCR's job,
+  so it is reported instead. Reconciliation is best effort — no `curl`, gateway
+  down, timeout, or an unexpected shape all leave the list untouched, since
+  preflight already reports a gateway that is genuinely unreachable.
 
 ## [0.2.0] - 2026-10-24
 
@@ -94,6 +143,10 @@ and the repo had no versioning.
   errors, and gateway/token preflight.
 - A pre-launch probe for `defer_loading` support (`CCR_CAPABILITY_CHECK`).
 
-[Unreleased]: https://github.com/zbn297427669/ccr-claude/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/zbn297427669/ccr-claude/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/zbn297427669/ccr-claude/releases/tag/v0.1.0
+[0.2.1]: https://github.com/zbn297427669/ccr-claude/compare/d45d646...v0.2.1
+[0.2.0]: https://github.com/zbn297427669/ccr-claude/compare/d2474b4...d45d646
+[0.1.0]: https://github.com/zbn297427669/ccr-claude/tree/d2474b4
+
+<!-- 0.1.0 and 0.2.0 predate tagging: they were written up from the commit
+     history and never got a tag or release of their own. Their links point at
+     commit ranges instead of tags so they resolve. v0.2.1 is the first tag. -->

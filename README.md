@@ -35,7 +35,8 @@ Everything else — which profile, which model, which context window — is the 
 ├── .github/workflows/
 │   └── check.yml        syntax checks for the embedded code in both launchers
 ├── tools/
-│   └── check.py         the same checks, runnable locally
+│   ├── check.py         the same checks, runnable locally
+│   └── release.py       cut a release: check, tag, build, verify
 ├── windows/
 │   ├── ccr-claude.ps1   real entry point
 │   ├── ccr-claude.cmd   thin shell for double-click / cmd
@@ -54,6 +55,42 @@ in both scripts, which no interpreter otherwise reads from disk:
 python3 -I tools/check.py --verbose
 ```
 
+## Prerequisites
+
+This project is a **launcher, not an installer**. It assumes three things are
+already on the machine:
+
+| What | Why | How |
+| --- | --- | --- |
+| **A running CCR gateway** | The launcher reads profiles, client keys, models and context windows from its `config.sqlite` | [CCR Desktop releases](https://github.com/musistudio/claude-code-router/releases) |
+| **An enabled Claude Code agent** | Only profiles that are enabled, have a model, and hold a plaintext client key are listed | Add a provider in CCR, then enable a Claude Code agent |
+| **`python3` with `sqlite3`** | Neither PowerShell nor bash has SQLite built in, so the launcher borrows python to read the database | Windows: `winget install Python.Python.3.12`<br>WSL/Linux: `sudo apt install python3` |
+
+Plus the official `claude` CLI itself (on Windows also `winget install Anthropic.ClaudeCode`).
+
+Two things that trip people up:
+
+- **`python3` is a hard dependency, not a nicety.** Without it the launcher exits
+  with `no python on PATH`. The Microsoft Store stub of `python` does **not**
+  count — the launcher skips anything under
+  `%LOCALAPPDATA%\Microsoft\WindowsApps\`, because the stub opens the Store and
+  exits silently when Python is not installed.
+- **Only you have your provider API keys.** No script can fill them into CCR for
+  you, so "one-click" ends once the launcher is in place and the real next step
+  is you adding a key in CCR.
+
+On Windows, `install.ps1` checks the first three for you and prints the install
+command for whatever is missing.
+
+**Downloading Claude Code**: the official source is
+`https://claude.ai/install.ps1`. If it is unreachable, the mirror
+`https://github.com/ProjectAILeap/claude-code-releases` archives the official
+binaries every 4 hours and ships a `sha256sums.txt` per release. A mirror
+checksum only proves the download is intact and matches that tag — not that
+upstream was untouched. When the official source is reachable, cross-check
+against `checksum` in
+`https://downloads.claude.ai/claude-code-releases/<version>/manifest.json`.
+
 ## Quick start
 
 **Windows** (PowerShell) — clone onto a local drive, then:
@@ -66,6 +103,12 @@ python3 -I tools/check.py --verbose
 The second form adds `windows\` to the user `PATH`, sets `CCR_CLAUDE_EXE` to
 wherever `claude.exe` already lives (it need not sit next to the script), and
 backs up both values first.
+
+The dry run starts with a **Preflight** block reporting python, the CCR data
+directory and the gateway. Anything missing is marked `!` with the command that
+fixes it. It **reports, it does not stop** — installing the launcher before
+configuring CCR is a legitimate order. Add `-Apply` once the environment is
+ready.
 
 ```bat
 ccr-claude                      :: profile menu when several are enabled

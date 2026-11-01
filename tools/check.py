@@ -31,6 +31,7 @@ SH = ROOT / "wsl" / "start-claude.sh"
 PS1 = ROOT / "windows" / "ccr-claude.ps1"
 CMD = ROOT / "windows" / "ccr-claude.cmd"
 INSTALL_PS1 = ROOT / "windows" / "install.ps1"
+PY_TOOLS = (ROOT / "tools" / "release.py",)
 
 VERBOSE = "--verbose" in sys.argv
 
@@ -252,12 +253,36 @@ def check_windows_encoding() -> None:
             ok(name)
 
 
+def check_py_tools() -> None:
+    """Every script under tools/ must parse.
+
+    `release.py` is run by the person cutting a release, on a machine that is
+    about to publish -- exactly where a syntax error is most expensive and
+    least convenient. Compiling it here means CI sees it first.
+    """
+    missing = [p.name for p in PY_TOOLS if not p.is_file()]
+    if missing:
+        fail("tools parse", f"missing: {', '.join(missing)}")
+        return
+    bad = []
+    for path in PY_TOOLS:
+        try:
+            compile(path.read_text(encoding="utf-8"), str(path), "exec")
+        except SyntaxError as e:
+            bad.append(f"{path.name}: {e.msg} (line {e.lineno})")
+    if bad:
+        fail("tools parse", "\n".join(bad))
+    else:
+        ok(f"tools parse ({len(PY_TOOLS)} file(s))")
+
+
 CHECKS = (
     check_bash_syntax,
     check_shell_heredocs,
     check_ps_embedded_python,
     check_ps_syntax,
     check_windows_encoding,
+    check_py_tools,
 )
 
 
