@@ -28,6 +28,7 @@ Everything else — which profile, which model, which context window — is the 
 .
 ├── README.md            this file
 ├── README.zh-CN.md
+├── SETUP.zh-CN.md       from-zero setup on a new Windows machine (Chinese)
 ├── CONTEXT-WINDOW.md    why the context window has to be passed by hand
 ├── CHANGELOG.md         what changed, per version
 ├── RELEASING.md         how a version is cut and what the archives must contain

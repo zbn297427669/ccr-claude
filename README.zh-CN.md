@@ -28,6 +28,7 @@
 .
 ├── README.md            本文件
 ├── README.zh-CN.md
+├── SETUP.zh-CN.md       全新 Windows 机器的从零安装指南（中文）
 ├── CONTEXT-WINDOW.md    为什么窗口要由启动器自己传
 ├── CHANGELOG.md         每个版本改了什么
 ├── RELEASING.md         怎么发版、发布包必须包含什么
@@ -56,6 +57,9 @@ python3 -I tools/check.py --verbose
 ```
 
 ## 前置要求
+
+> **全新机器？** 看 [SETUP.zh-CN.md](./SETUP.zh-CN.md)：从装 python、装 Claude Code CLI、
+> 装 CCR 到 `ccr-claude` 跑通，一步步带验证，含官方源连不上时的离线安装办法。
 
 这个项目是**启动器**，不是安装器。它假定下面三样东西已经在你机器上：
 

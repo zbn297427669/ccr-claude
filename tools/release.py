@@ -31,7 +31,7 @@ DIST = ROOT / "dist"
 # that adding a file to the release is a one-line change in one place. The two
 # READMEs and CONTEXT-WINDOW.md are shared; LICENSE travels with both because a
 # zip that omits it is not redistributable.
-COMMON = ["README.md", "README.zh-CN.md", "CONTEXT-WINDOW.md", "LICENSE"]
+COMMON = ["README.md", "README.zh-CN.md", "CONTEXT-WINDOW.md", "SETUP.zh-CN.md", "LICENSE"]
 ARTIFACTS = [
     ("windows", "zip", ["windows"] + COMMON),
     ("wsl", "tar.gz", ["wsl"] + COMMON),
