@@ -265,13 +265,14 @@ def main() -> int:
         return 0
 
     step("build")
-    # Without --publish, tag locally so `git archive <tag>` names exactly what
-    # would ship; the tag is deletable and unreleased. With --publish the same
-    # tag is what gets pushed.
-    if not args.publish:
-        r = run(["git", "tag", "-a", tag, "-m", f"ccr-claude {tag}"])
-        if r.returncode:
-            fail(f"git tag: {r.stderr.strip()}")
+    # Tag first, in both modes: `git archive <tag>` is what applies
+    # `.gitattributes`' eol=crlf at the exact commit being released, and
+    # `git archive HEAD` would name a tree that the pushed tag might not. The
+    # tag is local until --publish pushes it, so a failed build leaves only a
+    # deletable tag behind.
+    r = run(["git", "tag", "-a", tag, "-m", f"ccr-claude {tag}"])
+    if r.returncode:
+        fail(f"git tag: {r.stderr.strip()}")
     built = build(version, tag)
 
     step("verify")
