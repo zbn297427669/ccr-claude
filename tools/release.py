@@ -285,11 +285,19 @@ def main() -> int:
         print(f"\n{len(failures)} problem(s); do not publish these archives.")
         return 1
 
+    # Write the notes whether or not --publish was given: the notes are the
+    # part that goes public, and `dist/` is already gitignored, so this costs
+    # nothing and leaves something to read before deciding to publish.
+    notes = release_notes(version)
+    notes_path = DIST / f"notes-{tag}.md"
+    notes_path.write_text(notes + "\n", encoding="utf-8")
+    ok(f"notes -> {notes_path}")
+
     if not args.publish:
         print(f"\nBuilt {len(built)} archive(s) in dist/, tagged {tag} locally.")
         print("Nothing was pushed. When you are ready:")
         print(f"  git push origin {tag}")
-        print(f"  gh release create {tag} dist/* --title 'ccr-claude {tag}' --notes-file <notes>")
+        print(f"  gh release create {tag} dist/* --title 'ccr-claude {tag}' --notes-file {notes_path.name}")
         return 0
 
     step("publish")
@@ -299,9 +307,6 @@ def main() -> int:
         return 1
     ok(f"pushed {tag}")
 
-    notes = release_notes(version)
-    notes_path = DIST / f"notes-{tag}.md"
-    notes_path.write_text(notes + "\n", encoding="utf-8")
     gh = run(["gh", "release", "create", tag, *[str(p) for p in built],
               "--title", f"ccr-claude {tag}", "--notes-file", str(notes_path)])
     if gh.returncode:
