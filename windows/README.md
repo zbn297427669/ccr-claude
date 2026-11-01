@@ -177,7 +177,7 @@ powershell -NoProfile -File <repo>\windows\ccr-claude.ps1 -p "explain this repo"
 <repo>\windows\ccr-claude.cmd --pick-model
 <repo>\windows\ccr-claude.cmd --list-profiles
 <repo>\windows\ccr-claude.cmd --profile <id>       :: or set CCR_PROFILE
-<repo>\windows\ccr-claude.cmd --model XM/bonsai-heretic
+<repo>\windows\ccr-claude.cmd --model <local>/<model-alias>
 <repo>\windows\ccr-claude.cmd --context-window 262144
 <repo>\windows\ccr-claude.cmd --skip-check
 <repo>\windows\ccr-claude.cmd --continue
@@ -224,13 +224,13 @@ So the launcher writes an extra `%LOCALAPPDATA%\ccr-claude\settings.json` and pa
 For a model name absent from `~/.claude/cache/gateway-models.json`, Claude Code skips the autocompact threshold check entirely and the session grows until the engine refuses it. The cache holds long names:
 
 ```
-OD/deepseek-v4.1-flash  ->  anthropic/claude-ccr-h4f442f646565707365656b2d76342e312d666c617368
+<provider>/<model>  ->  anthropic/claude-ccr-h3c70726f76696465723e2f3c6d6f64656c3e
 ```
 
-The bytes after `h` are the original name in hex (`4f442f` = `OD/`), so it is reversible. The launcher does two things:
+The bytes after `h` are the original name in hex (`3c70726f76696465722f` = `<provider>/`), so it is reversible. The launcher does two things:
 
 - folds a short name / display_name into the cache `id` before setting `ANTHROPIC_MODEL`;
-- decodes a pasted long name back to `OD/deepseek-v4.1-flash` to look up the provider and window.
+- decodes a pasted long name back to `<provider>/<model>` to look up the provider and window.
 
 `[claude-code:unrecognized_model]` is telemetry, not an error; the request returns normally.
 
@@ -250,9 +250,9 @@ In 2.1.310 the check is `ua().source !== "none" && kp().source !== "none"`. `Ng(
 
 `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL` supplies the text of those `/model` menu entries. Passing the cache's long name (`anthropic/claude-ccr-h<hex>`) gives you a wall of ids, so the launcher decodes back to the CCR name first.
 
-But **not** to the cache's `display_name` (`Go/DeepSeek V4 Flash (1M context)`): the gateway accepts only the CCR short and long names; `display_name` returns 403 exactly like a fabricated name, so picking it in the menu sends nothing. The decoded `OD/deepseek-v4.1-flash` both routes and reads well.
+But **not** to the cache's `display_name` (`<provider>/<Model Display Name>`): the gateway accepts only the CCR short and long names; `display_name` returns 403 exactly like a fabricated name, so picking it in the menu sends nothing. The decoded `<provider>/<model>` both routes and reads well.
 
-Decoding must preserve the `[1m]` suffix (`Go/deepseek-v4-flash[1m]` and `Go/deepseek-v4-flash` are two different gateway entries), and the local variables must not be called `$m` — PowerShell variable names are case-insensitive, so `$m` *is* the parameter `$M`, and `Substring` rewrites the original too.
+Decoding must preserve the `[1m]` suffix (`<provider>/<model>[1m]` and `<provider>/<model>` are two different gateway entries), and the local variables must not be called `$m` — PowerShell variable names are case-insensitive, so `$m` *is* the parameter `$M`, and `Substring` rewrites the original too.
 
 ### 5. `$ErrorActionPreference='Stop'` turns redirected stderr into a fatal error
 
@@ -295,23 +295,23 @@ It now writes a temp file (UTF-8 without BOM, GUID-named to avoid collisions), d
 
 ## Windows for local models
 
-`XM/bonsai-heretic` has an empty `contextWindow` in CCR's `modelMetadata`, and `/v1/models` cannot answer while the engine is down. In that case the launcher sets **no** `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (blank beats a guess), so the menu shows `unknown` and Claude Code falls back to `autoCompactWindow` in `settings.json` — 500000 for that model there — before its own 200000 default.
+`<local>/<model-alias>` has an empty `contextWindow` in CCR's `modelMetadata`, and `/v1/models` cannot answer while the engine is down. In that case the launcher sets **no** `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (blank beats a guess), so the menu shows `unknown` and Claude Code falls back to `autoCompactWindow` in `settings.json` — 500000 for that model there — before its own 200000 default.
 
-Per `ninfer\launcher\config.bat` the current engine variant is `ternary` with 524288; switching to `kvmem-0.18.0` clamps it to 262144. To get the full window, say so:
+The engine's own launcher script pins the variant and its window; switching variants can clamp the window to a smaller value. To get the full window, say so:
 
 ```bat
-ccr-claude.cmd --model XM/bonsai-heretic --context-window 524288
+ccr-claude.cmd --model <local>/<model-alias> --context-window 524288
 ```
 
 Claude Code's rule is **`effectiveWindow = MAX − 20000`**. There is **no** 800000 cap in 2.1.310 (`1000000` measures 980000), so the old "780000 ceiling" note no longer applies.
 
 ### `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is global
 
-It clamps **every** model, not just the current one. The launcher therefore resolves it per run, from the model that is about to start, rather than leaving one fixed number in the environment: `OD/deepseek-v4.1-flash` resolves to 1000000, `Go/qwen3.8-max` to 1048576.
+It clamps **every** model, not just the current one. The launcher therefore resolves it per run, from the model that is about to start, rather than leaving one fixed number in the environment: `<cloud>/<model-a>` resolves to 1000000, `<cloud>/<model-b>` to 1048576.
 
-What the menu prints is the model's window, not necessarily where compaction fires: `settings.json` pins `autoCompactWindow` per model (800000 for the `deepseek` entries, 500000 for the XM ones), and `pS()` takes `Math.min(window, pin)`. Pass `--context-window` to override both:
+What the menu prints is the model's window, not necessarily where compaction fires: `settings.json` pins `autoCompactWindow` per model (800000 for the cloud entries, 500000 for the local ones), and `pS()` takes `Math.min(window, pin)`. Pass `--context-window` to override both:
 
 ```bat
-ccr-claude.cmd --model Go/qwen3.8-max --context-window 1048576
-ccr-claude.cmd --model Go/qwen3.8-max --context-window off
+ccr-claude.cmd --model <cloud>/<model-b> --context-window 1048576
+ccr-claude.cmd --model <cloud>/<model-b> --context-window off
 ```

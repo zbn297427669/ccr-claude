@@ -47,7 +47,7 @@
   .\ccr-claude.ps1 --profile claude-code
   .\ccr-claude.ps1 --list-profiles
   .\ccr-claude.ps1 --pick-model
-  .\ccr-claude.ps1 --model XM/bonsai-heretic
+  .\ccr-claude.ps1 --model <provider>/<model>
   .\ccr-claude.ps1 -p "解释这个仓库"
 #>
 
@@ -187,7 +187,7 @@ function Format-WindowLabel([string]$N) {
 }
 
 # Claude Code 的网关缓存把模型名编码成 anthropic/claude-ccr-h<hex>，其中
-# <hex> 就是原始名（"OD/deepseek-v4.1-flash" -> 4f442f + "deepseek-v4.1-flash"）。
+# <hex> 就是原始名（"<provider>/<model>" -> 3c70726f76696465723e2f + "<model>"）。
 # 是可逆的，所以用缓存里的长名也能找回 CCR 那边的供应商和模型。
 function Expand-GatewayModel([string]$Name) {
     if (-not $Name) { return $Name }
@@ -196,7 +196,7 @@ function Expand-GatewayModel([string]$Name) {
     $work = $Name.Trim()
     $orig = $Name
     # [1m] 这类后缀是 Claude Code 的窗口标注，不在十六进制里。剥掉再解码，
-    # 解完要原样接回去——"Go/deepseek-v4-flash[1m]" 和 "Go/deepseek-v4-flash"
+    # 解完要原样接回去——"<provider>/<model>[1m]" 和 "<provider>/<model>"
     # 在网关那边是两个条目。
     $suffix = ''
     $i = $work.IndexOf('[')
@@ -331,9 +331,9 @@ try:
         def window_of(entry):
             # 平面字段是端点返回的形状；limits 是 CCR 自带目录的形状 ——
             # 以前只认平面字段，于是那个目录一条都没匹配上。
-            # meta.n_ctx 是 llama.cpp 系的形状（Strata 的服务器返回
-            # {"id":…,"meta":{"n_ctx":32768}}），ninfer 的 ring 构建也用它 ——
-            # ninfer 自己的启动器三种都读，这里漏了它，那些引擎就解析不到窗口。
+            # meta.n_ctx 是 llama.cpp 系的形状（不少本地服务器返回
+            # {"id":…,"meta":{"n_ctx":32768}}），另一些只在 ring 构建里这么答 ——
+            # 它们自己的启动器三种都读，这里漏了它，那些引擎就解析不到窗口。
             for f in ("context_window", "contextWindow",
                       "max_context_window", "max_model_len"):
                 v = to_int(entry.get(f))
@@ -421,7 +421,7 @@ try:
             p = providers.get(prov) or {}
             meta = p.get("meta") or {}
             # 只认这个模型自己的名字。早期版本把 provider 元数据里其它模型的
-            # 名字也放进候选集，结果 deepseek-v4.1-flash 继承了邻居在
+            # 名字也放进集合，结果某个短名继承了邻居在
             # models.json 里写的值。
             wanted = {part, name}
 
@@ -442,7 +442,7 @@ try:
                 if "__single__" in found:
                     return found["__single__"]
 
-            # 3. 目录。同一个模型名可能对上多条（deepseek/deepseek-v4.1-flash
+            # 3. 目录。同一个模型名可能对上多条（同名条目分属不同供应商
             #    写 1050000，alibaba/... 写 1000000），取先出现的等于掷硬币。
             #    要求它们一致：10% 以内算同一个模型，取小的那个（只会提前压缩，
             #    不会滞后）；差距更大说明这名字确实是两个东西，那这份文件就
@@ -669,7 +669,7 @@ if (-not $Token) {
 }
 
 # ---------------------------------------------------------------- 选模型
-# 用户可能给的是 CCR 的 XM/xxx，也可能直接抄了网关缓存里的 anthropic/claude-ccr-h<hex>。
+# 用户可能给的是 CCR 的 <provider>/xxx，也可能直接抄了网关缓存里的 anthropic/claude-ccr-h<hex>。
 # 先把后者还原成 CCR 认识的名字，否则查不到供应商，窗口也就无从解析。
 $RawModel = if ($ModelName) { $ModelName } else { $env:MODEL }
 $ModelSource = if ($ModelName) { '--model' } elseif ($env:MODEL) { 'MODEL' } else { '' }
@@ -827,7 +827,7 @@ if ($CanonicalModel -ne $RawModel) {
     $RawModel = $CanonicalModel
 }
 if (-not $RawModel) { Stop-With "model name is empty." }
-# 原样传下去：CCR 的写法（OD/deepseek-v4.1-flash）和缓存长名
+# 原样传下去：CCR 的写法（<provider>/<model>）和缓存长名
 # （anthropic/claude-ccr-h<hex>）都能被网关接受。不要截成最后一段——
 # 那样既丢前缀又对不上缓存。
 $ModelForEnv = $RawModel
@@ -836,9 +836,9 @@ $ModelForEnv = $RawModel
 # "Custom …" 显示的文本。以前四个都塞 $ModelForEnv，而它常是缓存长名
 # anthropic/claude-ccr-h<hex>，菜单里就是一堆编号。
 #
-# 这里不能填缓存的 display_name（"Go/DeepSeek V4 Flash (1M context)"）：实测
+# 这里不能填缓存的 display_name（"<provider>/<Model Display Name>"）：实测
 # 网关只认 CCR 短名和长名，display_name 和伪造名字一样直接 403——菜单选它
-# 就发不出请求。反解回 CCR 名（"OD/deepseek-v4.1-flash"）既可路由又是人话。
+# 就发不出请求。反解回 CCR 名（"<provider>/<model>"）既可路由又是人话。
 $ModelLabel = Expand-GatewayModel $ModelForEnv
 if (-not $ModelLabel) { $ModelLabel = $ModelForEnv }
 

@@ -102,22 +102,22 @@ context is `MAX − 20000` (output reserve), and that version has no 800000 cap.
 
 - **`models.json` was never read.** Its windows live under
   `limits.contextTokens` / `limits.inputTokens`, and the lookup only knew flat
-  fields, so that source matched zero entries. `OD/deepseek-v4.1-flash` now
+  fields, so that source matched zero entries. A 1M-window model now
   resolves to `1000000`.
 - **Conflicting catalog entries now require agreement.** One model name can map
-  to several entries ~5% apart (`alibaba/…` and `deepseek/…` both list
-  `deepseek-v4-pro`). They must agree within 10%, and the smaller value wins —
+  to several entries ~5% apart (`vendor-a/…` and `vendor-b/…` both list the
+  same model). They must agree within 10%, and the smaller value wins —
   it can only compact early, never late. A wider spread means the name really
   names two models, and then the file is treated as knowing nothing.
 - **A model no longer inherits its neighbours' windows.** Every name in the
-  provider's metadata used to be a candidate, so `deepseek-v4.1-flash` could
+  provider's metadata used to be a candidate, so a short name could
   pick up whatever another model in the same provider declared. Only the model's
   own names count now.
 - **The per-install catalog's 128000 is skipped.** CCR writes `KFe=128e3` for
   any model it has no metadata for. That is a default, not a reading — treating
   it as one had been pulling a configured 800000 down to 128000.
 - **WSL strips the `[1m]` suffix when resolving**, matching the Windows side, so
-  `Go/deepseek-v4-flash[1m]` and `Go/deepseek-v4-flash` resolve the same.
+  `<provider>/<model>[1m]` and `<provider>/<model>` resolve the same.
 
 ### Changed
 

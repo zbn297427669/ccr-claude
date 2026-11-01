@@ -176,7 +176,7 @@ powershell -NoProfile -File <repo>\windows\ccr-claude.ps1 -p "解释这个仓库
 <repo>\windows\ccr-claude.cmd --pick-model
 <repo>\windows\ccr-claude.cmd --list-profiles
 <repo>\windows\ccr-claude.cmd --profile <id>       :: 或设 CCR_PROFILE
-<repo>\windows\ccr-claude.cmd --model XM/bonsai-heretic
+<repo>\windows\ccr-claude.cmd --model <local>/<model-alias>
 <repo>\windows\ccr-claude.cmd --context-window 262144
 <repo>\windows\ccr-claude.cmd --skip-check
 <repo>\windows\ccr-claude.cmd --continue
@@ -241,13 +241,13 @@ powershell -NoProfile -File <repo>\windows\ccr-claude.ps1 -p "解释这个仓库
 autocompact 的阈值检查，会话一路长到引擎拒绝为止。缓存里是长名：
 
 ```
-OD/deepseek-v4.1-flash  ->  anthropic/claude-ccr-h4f442f646565707365656b2d76342e312d666c617368
+<provider>/<model>  ->  anthropic/claude-ccr-h3c70726f76696465723e2f3c6d6f64656c3e
 ```
 
-`h` 后面是原始名的十六进制（`4f442f` = `OD/`），可逆。启动器做两件事：
+`h` 后面是原始名的十六进制（`3c70726f76696465722f` = `<provider>/`），可逆。启动器做两件事：
 
 - 把用户给的短名 / display_name 折算成缓存里的 `id` 再设 `ANTHROPIC_MODEL`；
-- 把用户直接抄来的长名反解成 `OD/deepseek-v4.1-flash` 去查供应商和窗口。
+- 把用户直接抄来的长名反解成 `<provider>/<model>` 去查供应商和窗口。
 
 `[claude-code:unrecognized_model]` 是 telemetry 日志，不是错误，请求正常返回。
 
@@ -275,11 +275,11 @@ NOT-CALLED）。
 显示文本。传缓存长名 `anthropic/claude-ccr-h<hex>` 就是一堆编号，所以启动器先
 反解成 CCR 名再传。
 
-但**不能**传缓存里的 `display_name`（`Go/DeepSeek V4 Flash (1M context)`）：实测网关
+但**不能**传缓存里的 `display_name`（`<provider>/<Model Display Name>`）：实测网关
 只认 CCR 短名和长名，`display_name` 和伪造名字一样直接 403——菜单选它发不出请求。
-反解出来的 `OD/deepseek-v4.1-flash` 既可路由又是人话。
+反解出来的 `<provider>/<model>` 既可路由又是人话。
 
-反解时要保住 `[1m]` 后缀（`Go/deepseek-v4-flash[1m]` 和 `Go/deepseek-v4-flash` 在网关
+反解时要保住 `[1m]` 后缀（`<provider>/<model>[1m]` 和 `<provider>/<model>` 在网关
 是两个条目），并且函数里的局部变量别叫 `$m`——PowerShell 变量名大小写不敏感，
 `$m` 就是参数 `$M`，`Substring` 会把原始值一起改掉。
 
@@ -338,15 +338,15 @@ exit $rc
 
 ## 已知缺口：本地模型的窗口
 
-`XM/bonsai-heretic` 在 CCR 的 `modelMetadata` 里 `contextWindow` 为空，引擎没启动时
+`<local>/<model-alias>` 在 CCR 的 `modelMetadata` 里 `contextWindow` 为空，引擎没启动时
 `/v1/models` 也问不到。此时启动器**不设** `CLAUDE_CODE_MAX_CONTEXT_TOKENS`（宁可留空
 也不猜），Claude Code 会按 200000 的默认值算。
 
-按 `ninfer\launcher\config.bat`，当前引擎变体是 `ternary`、窗口配到 524288；换成
-`kvmem-0.18.0` 时启动器会把它压到 262144。要跑满就显式给：
+引擎自带的启动批处理会固定变体和窗口值；换变体时窗口可能被压小（例如从 524288
+压到 262144）。要跑满就显式给：
 
 ```bat
-ccr-claude.cmd --model XM/bonsai-heretic --context-window 524288
+ccr-claude.cmd --model <local>/<model-alias> --context-window 524288
 ```
 
 注意 Claude Code 的换算规则是 **`effectiveWindow = MAX − 20000`**。2.1.310 上**没有**
@@ -356,10 +356,10 @@ ccr-claude.cmd --model XM/bonsai-heretic --context-window 524288
 ### `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 是全局的
 
 它会 clamp **所有**模型，不只当前这个。用户 `settings.json` 里现在写 `128000`
-（`OD/deepseek-v4.1-flash` 的真实窗口，CCR 的 `contextWindowPinned` 和每机 catalog
-两处都对得上），代价是 `Go/qwen3.8-max` 这种真实 1048576 的模型也被压到 108000。
+（`<cloud>/<model-a>` 的真实窗口，CCR 的 `contextWindowPinned` 和每机 catalog
+两处都对得上），代价是 `<cloud>/<model-b>` 这种真实 1048576 的模型也被压到 108000。
 要用满就显式覆盖：
 
 ```bat
-ccr-claude.cmd --model Go/qwen3.8-max --context-window 1048576
+ccr-claude.cmd --model <cloud>/<model-b> --context-window 1048576
 ```

@@ -615,9 +615,9 @@ def window_of(entry):
     Flat fields are what an endpoint returns. `limits` is what CCR's shipped
     catalog uses -- and that catalog had been read with the flat-field loop
     alone, so this branch never matched a single entry. `meta.n_ctx` is the
-    llama.cpp-family shape (Strata's server answers
-    {"id": ..., "meta": {"n_ctx": 32768}}), and ninfer's ring builds use it
-    too -- ninfer's own launcher reads all three, which is why leaving it out
+    llama.cpp-family shape (many local servers answer
+    {"id": ..., "meta": {"n_ctx": 32768}}), and some ring builds use it
+    too -- their own launchers read all three, which is why leaving it out
     here made every such engine resolve to nothing.
     """
     for f in ("context_window", "contextWindow", "max_context_window",
@@ -698,8 +698,8 @@ def probed_windows(base, key):
     a cold start).
 
     A local endpoint often serves one model under the id it was built with,
-    which need not be the name CCR or the profile uses (here: CCR says
-    bonsai-v3, the artifact answers as bonsai-heretic). A single-model endpoint
+    which need not be the name CCR or the profile uses (here: CCR says one
+    name, the artifact answers as another). A single-model endpoint
     is unambiguous, so its window is also filed under "__single__" -- the
     caller uses that only for models whose provider is this same endpoint, so a
     cloud model never inherits a local window.
@@ -744,7 +744,7 @@ def resolve(name):
     meta = p.get("meta") or {}
     # Only this model's own names. The provider's other models are not
     # candidates: an earlier version also matched every name in its metadata,
-    # which made `deepseek-v4.1-flash` inherit whatever its neighbours in
+    # which made a short name inherit whatever its neighbours in
     # models.json happened to declare.
     wanted = {part, name}
 
@@ -770,8 +770,8 @@ def resolve(name):
     #    catalog under .codex is generated for Codex and fills in a hard-coded
     #    128000 whenever a model has no provider metadata -- a guess (see below).
     for label, data in catalog_data():
-        # One model name can map to several entries -- `deepseek/deepseek-v4.1-flash`
-        # says 1050000, `alibaba/...` says 1000000, and both list the same model
+        # One model name can map to several entries -- `vendor-a/model` says
+        # 1050000, `vendor-b/model` says 1000000, and both list the same model
         # name. Taking whichever came first would be a coin flip, so require
         # them to agree. "Agree" means within 10%: a 5% spread is the same model
         # seen by two providers, and the smaller number is the safe one (it can
