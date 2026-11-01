@@ -71,14 +71,14 @@ cp config.sqlite config.sqlite-wal config.sqlite-shm /tmp/
 ```
 
 我第一次就是因为漏了 WAL，得出「CCR 里全是云端供应商」的错误结论，
-其实本地供应商 `XM` 一直都在。
+其实某个本地供应商一直都在。
 
 ### 3.2 三个 profile 共用一个 settings 文件
 
 ```
-default-claude-code     settingsFile=~/.claude/settings.json
-claude-code-deepseek    settingsFile=~/.claude/settings.json
-claude-code            settingsFile=~/.claude/settings.json
+<profile-a>     settingsFile=~/.claude/settings.json
+<profile-b>     settingsFile=~/.claude/settings.json
+<profile-c>     settingsFile=~/.claude/settings.json
 ```
 
 - **已启动的进程不受影响**（环境变量在启动那一刻固定）
@@ -105,38 +105,38 @@ claude-code            settingsFile=~/.claude/settings.json
 
 ```
 403 Gateway plugin "ccr-router-request-transform" request transform failed:
-    Model "XM/bonsai-v3" is not allowed for this profile.
+    Model "<provider>/<alias>" is not allowed for this profile.
 ```
 
-白名单里写的是 `XM/ninfer-local`，写成 `XM/bonsai-v3` 就被挡。
+白名单里写的是 `LOC/local-model`，写成 `LOC/model-v3` 就被挡。
 
 ### 3.5 `/v1/models` 不列出所有白名单模型
 
 实测：`availableModels` 有三个，`/v1/models` 只返回两个：
 
 ```json
-{"id":"Go/deepseek-v4-flash"}, {"id":"OD/deepseek-v4.1-flash"}
+{"id":"<cloud-a>/<model-a>"}, {"id":"<cloud-b>/<model-b>"}
 ```
 
-**`XM/ninfer-local` 不在里面**，即使引擎正常在跑（8091 返回 200）。
+**`LOC/local-model` 不在里面**，即使引擎正常在跑（8091 返回 200）。
 这直接导致 §4.1 的问题。
 
 ### 3.6 本地引擎的模型名和 CCR 里写的不一致
 
 | 位置 | 名字 |
 | --- | --- |
-| 引擎 `/v1/models` 实际报的 | `bonsai-heretic` |
-| CCR provider 的 `models` 字段 | `bonsai-v3` |
-| CCR profile 的白名单 | `ninfer-local` |
-| Claude Code 的网关别名 | `anthropic/claude-ccr-h584d2f6e696e6665722d6c6f63616c` |
+| 引擎 `/v1/models` 实际报的 | `model-heretic` |
+| CCR provider 的 `models` 字段 | `model-v3` |
+| CCR profile 的白名单 | `local-model` |
+| Claude Code 的网关别名 | `anthropic/claude-ccr-h4c4f432f6c6f63616c2d6d6f64656c` |
 
 四个名字指同一个模型。排查时对不上号是常态，别以为配置错了。
 
 那个 hex 就是模型名的十六进制：
 
 ```bash
-python3 -c "print(bytes.fromhex('584d2f6e696e6665722d6c6f63616c').decode())"
-# → XM/ninfer-local
+python3 -c "print(bytes.fromhex('4c4f432f6c6f63616c2d6d6f64656c').decode())"
+# → LOC/local-model
 ```
 
 ### 3.7 `managedCompact` 会让 Claude Code 的压缩完全不跑
@@ -174,10 +174,10 @@ set CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000
 
 | `--model` 写法 | autocompact 是否运行 |
 | --- | --- |
-| `anthropic/claude-ccr-h584d2f6e696e6665722d6c6f63616c` | ✅ 运行 |
-| `ninfer-local` / `XM/ninfer-local` / `bonsai-v3` | ❌ **完全不检查** |
-| `deepseek-v4.1-flash`（云端） | ✅ 运行 |
-| `OD/deepseek-v4.1-flash` | ❌ 不检查 |
+| `anthropic/claude-ccr-h4c4f432f6c6f63616c2d6d6f64656c` | ✅ 运行 |
+| `local-model` / `LOC/local-model` / `model-v3` | ❌ **完全不检查** |
+| `<cloud-a>/<model-a>` | ✅ 运行 |
+| `<cloud-b>/<model-b>` | ❌ 不检查 |
 
 规律是：**模型名必须在 Claude Code 的网关缓存里有条目**
 （`~/.claude/cache/gateway-models.json`），否则压缩检查直接不跑。
@@ -188,7 +188,7 @@ set CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000
 
 ### 4.2 `[1m]` 后缀的模型没有 autocompact
 
-`settings.json` 里 `ANTHROPIC_DEFAULT_*_MODEL` 都写成 `Go/deepseek-v4-flash[1m]`。
+`settings.json` 里 `ANTHROPIC_DEFAULT_*_MODEL` 都写成 `<provider>/<model>[1m]`。
 带 `[1m]` 后缀的模型，`--debug` 里没有 `autocompact:` 行。
 
 ### 4.3 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 的换算
@@ -234,12 +234,11 @@ set CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000
 
 | 键名 | 是否生效 |
 | --- | --- |
-| `anthropic/claude-ccr-h584d2f6e696e6665722d6c6f63616c` | ✅ |
-| `XM/ninfer-local` / `ninfer-local` / `bonsai-v3` / `bonsai-heretic` | ❌ |
+| `anthropic/claude-ccr-h4c4f432f6c6f63616c2d6d6f64656c` | ✅ |
+| `LOC/local-model` / `local-model` / `model-v3` / `model-heretic` | ❌ |
 
 这些键是 `/autocompact` 命令按当时会话的模型名写进去的，所以会随着
-历史使用积累出多种形式（`deepseek-v4-flash`、`deepseek-v4.1-flash`、
-`settings` 兜底……）。
+历史使用积累出多种形式（同一个模型的不同短名、`settings` 兜底……）。
 
 ---
 
@@ -254,13 +253,13 @@ set CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000
 
 1. **CCR 存储的 `modelMetadata.contextWindow`** —— CCR 上次探测的结果
 2. **供应商的 `/v1/models`** —— 仅当它是本机回环地址。单模型端点直接采信
-   （本地引擎常见：CCR 里叫 `bonsai-v3`，实际答 `bonsai-heretic`）。
+   （本地引擎常见：CCR 里叫 `model-v3`，实际答 `model-heretic`）。
    端点返回的窗口字段有五种形状，`window_of()` 全部试一遍：
    平铺的 `context_window` / `contextWindow` / `max_context_window` /
    `max_model_len`、嵌套的 `limits.contextTokens`（CCR 自带目录的形状），
-   以及嵌套的 **`meta.n_ctx`**（llama.cpp 系：Strata 的服务器答
-   `{"id":…,"meta":{"n_ctx":32768}}`，ninfer 的 ring 构建同理。
-   ninfer 自己的 `lib/engine-status.ps1` 也是三种都读）
+   以及嵌套的 **`meta.n_ctx`**（llama.cpp 系：不少本地推理服务器的 `/v1/models`
+   答 `{"id":…,"meta":{"n_ctx":32768}}`，另一些只在这种 ring 构建里这么答；
+   它们自己的启动器也是三种字段都读）
 3. **CCR 自带的总 catalog** `models.json`，读 `limits.contextTokens`
    （`limits.inputTokens` 兜底）。同名对上多条时要求一致：差 10% 以内算同一个
    模型、取小值（只会提前压缩，不会滞后）；差更多说明这名字真是两个东西，
@@ -334,7 +333,7 @@ Tools: UNUSABLE -- this model rejects defer_loading, which Claude Code
 CCR_CAPABILITY_CHECK=off ccr-claude   # 跳过探测
 ```
 
-这条针对的是引擎侧的限制（NInfer 明确返回 `deferred_tools_not_supported`），
+这条针对的是引擎侧的限制（某个本地推理引擎明确返回 `deferred_tools_not_supported`），
 客户端和 CCR 都改不了。已提 CCR 侧 issue #1912。
 
 ---
@@ -350,7 +349,7 @@ CCR_CAPABILITY_CHECK=off ccr-claude   # 跳过探测
 
 变慢的是引擎侧。6 个并发请求的单次耗时是 0.5 / 2.0 / 3.2 秒，总耗时 3.2 秒
 ——**等于最慢那个**，说明请求在引擎里排队。引擎以 `--max-concurrency 1`
-启动（`bin\ninfer.bat` 固定传这个值），这是设计如此，不是中间层造成的。
+启动（引擎自带的启动批处理固定传这个值），这是设计如此，不是中间层造成的。
 
 ### 出现过一次串话，未能复现
 
@@ -381,13 +380,13 @@ context cache | 1 active + 1 cached device states | host 8 states | 8.00 GiB KV
 
 - **§4.1 那个问题脚本补不了。** 本地模型的别名不在网关缓存里，
   autocompact 就不跑——窗口设得再对也没用。这需要在 CCR 侧让
-  `/v1/models` 列出 `XM/ninfer-local`，或者让网关给出的 id 带上窗口信息。
+  `/v1/models` 列出 `LOC/local-model`，或者让网关给出的 id 带上窗口信息。
 - **云端模型的 128000 未必是真的。** CCR 的 per-install catalog 里
-  `OD/deepseek-v4.1-flash` 标 128000，但 CCR 自带的总 catalog
+  `<cloud-b>/<model-b>` 标 128000，但 CCR 自带的总 catalog
   （`models.json`）里同名条目标的是一百万量级。启动器现在按上面第五节的顺序
   解析，并且把 per-install catalog 里的 128000 当占位符跳过，这就是为什么
-  `OD/deepseek-v4.1-flash` 解析出的是 1000000 而不是 128000。
-- **`Go/qwen3.8-max` 标 1048576（`models.json`），实际压缩点是 `min(窗口, 钉值)`。**
+  `<cloud-b>/<model-b>` 解析出的是 1000000 而不是 128000。
+- **有的模型在 `models.json` 里标 1048576，实际压缩点是 `min(窗口, 钉值)`。**
   2.1.310 上没有 800000 硬顶，但用户 `settings.json` 的
   `modelSettings.settings.autoCompactWindow` 若钉了更低的值，运行时会取小。
   要用满必须显式给 MAX（`--context-window 1048576`），它同样会被
@@ -413,5 +412,5 @@ curl -s -H "authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
 cat ~/.claude/cache/gateway-models.json
 
 # 模型名 → 网关别名
-python3 -c "print('anthropic/claude-ccr-h' + 'XM/ninfer-local'.encode().hex())"
+python3 -c "print('anthropic/claude-ccr-h' + 'LOC/local-model'.encode().hex())"
 ```
