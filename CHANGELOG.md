@@ -6,9 +6,16 @@ describes a set of behaviours, and the two files must agree on them.
 The window figures were measured against **Claude Code 2.1.310**. Effective
 context is `MAX − 20000` (output reserve), and that version has no 800000 cap.
 
-## [Unreleased]
+## [0.3.0] - 2026-11-01
 
 ### Added
+
+- **`SETUP.zh-CN.md` — from-zero setup on a new Windows machine.** The repo
+  documented how the launchers behave but never how to get a machine that can
+  run them. It covers python-with-`sqlite3` (the launcher's hard dependency),
+  the Claude Code CLI including the offline path, CCR Desktop, adding a provider
+  key, and installing the launcher, with a verification step for each. Ships in
+  both release archives, so a downloaded zip is self-contained.
 
 - **`windows/install-claude.ps1` installs the Claude Code CLI from a local
   exe, with no network.** `claude install` needs the network twice — to resolve
@@ -22,6 +29,22 @@ context is `MAX − 20000` (output reserve), and that version has no 800000 cap.
   release's `sha256sums.txt`, or `-ExpectedHash` when there is no network at
   all. Dry run by default; `-Cache` also seeds the version cache so a later
   `claude install <ver>` works offline.
+
+  `-Exe` is optional: with no path it searches the current directory, its own
+  directory and `Downloads`, newest first, and names what it picked. More than
+  one candidate is reported rather than silently resolved — installing the
+  wrong version is the one mistake the hash check could only catch after a
+  320MB read.
+
+### Fixed
+
+- **`tools/release.py` reported a correct changelog as broken.** The
+  `[Unreleased]` check compared the bracketed string against a heading list
+  that had its brackets stripped, so it fired on every changelog whose top
+  section was still `[Unreleased]`.
+
+- **`tools/check.py` was committed with CRLF line endings**, against
+  `.gitattributes`' `eol=lf` for `*.py`.
 
 ## [0.2.1] - 2026-11-01
 
@@ -160,8 +183,8 @@ and the repo had no versioning.
   errors, and gateway/token preflight.
 - A pre-launch probe for `defer_loading` support (`CCR_CAPABILITY_CHECK`).
 
+[0.3.0]: https://github.com/zbn297427669/ccr-claude/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/zbn297427669/ccr-claude/compare/d45d646...v0.2.1
-[Unreleased]: https://github.com/zbn297427669/ccr-claude/compare/v0.2.1...HEAD
 [0.2.0]: https://github.com/zbn297427669/ccr-claude/compare/d2474b4...d45d646
 [0.1.0]: https://github.com/zbn297427669/ccr-claude/tree/d2474b4
 

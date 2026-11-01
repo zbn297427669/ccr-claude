@@ -4,7 +4,7 @@
 按顺序做，每步都有验证命令；验证不过就别往下走。
 
 > 适用范围：Windows 11 + PowerShell。WSL 侧见 §7。
-> 本文对应 ccr-claude **v0.2.1**（2026-11-01 发布）。
+> 本文对应 ccr-claude **v0.3.0**（2026-11-01 发布）。
 
 ---
 
@@ -283,13 +283,13 @@ git clone https://github.com/zbn297427669/ccr-claude.git C:\tools\ccr-claude
 **方式 B：下载发布包**
 
 从 https://github.com/zbn297427669/ccr-claude/releases/latest 下
-`ccr-claude-v0.2.1-windows.zip`，解压到**本地盘**（不能放 `\\wsl.localhost\...` 这类 UNC 路径，
+`ccr-claude-v0.3.0-windows.zip`，解压到**本地盘**（不能放 `\\wsl.localhost\...` 这类 UNC 路径，
 `RemoteSigned` 策略下那儿 `.ps1` 根本跑不起来）。
 
 解压后**必须**先清掉 Mark of the Web，否则 `.ps1` 会报 `SecurityError: UnauthorizedAccess`：
 
 ```powershell
-cd <解压目录>\ccr-claude-v0.2.1-windows
+cd <解压目录>\ccr-claude-v0.3.0-windows
 Get-ChildItem -Recurse -Include *.ps1, *.cmd | Unblock-File
 ```
 
@@ -424,8 +424,8 @@ $new = ($p.Split(';') | Where-Object { $_ -and $_.TrimEnd('\') -ne $dir.TrimEnd(
 sudo apt install -y python3 curl
 
 # 用发布包
-tar -xzf ccr-claude-v0.2.1-wsl.tar.gz
-cd ccr-claude-v0.2.1-wsl/wsl
+tar -xzf ccr-claude-v0.3.0-wsl.tar.gz
+cd ccr-claude-v0.3.0-wsl/wsl
 chmod +x start-claude.sh
 mkdir -p ~/.local/bin
 ln -sfn "$(pwd)/start-claude.sh" ~/.local/bin/ccr-claude
@@ -499,7 +499,7 @@ ccr-claude -p "回复 ok"
 | --- | --- | --- |
 | Claude Code | 2.1.316 | https://claude.ai/install.ps1 |
 | CCR Desktop | 3.1.3 | https://github.com/musistudio/claude-code-router/releases |
-| ccr-claude | 0.2.1 | https://github.com/zbn297427669/ccr-claude/releases |
+| ccr-claude | 0.3.0 | https://github.com/zbn297427669/ccr-claude/releases |
 
 > 上下文窗口相关的实测数据（`effectiveWindow = MAX − 20000` 等）对应 Claude Code 2.1.310，
 > 细节见 ccr-claude 仓库的 `CONTEXT-WINDOW.md`。
