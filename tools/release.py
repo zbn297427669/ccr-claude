@@ -176,24 +176,32 @@ def verify_zip(path: Path, version: str) -> None:
     """The CRLF check RELEASING.md calls out as the one that catches real bugs.
 
     A `.ps1` with LF endings still runs; a `.cmd` with LF endings does not. Both
-    are supposed to be CRLF, and only the archive can prove what a downloader
-    gets.
+    are supposed to be CRLF, but only the `.ps1` takes a BOM: cmd's parser would
+    run a leading BOM as part of line 1. This mirrors `check_windows_encoding`
+    in tools/check.py -- keep the two in step.
     """
     prefix = path.name[: -len(".zip")]
+    wanted = {
+        "windows/ccr-claude.ps1": True,    # BOM required (PowerShell 5.1 reads GBK otherwise)
+        "windows/ccr-claude.cmd": False,   # BOM forbidden (cmd would run it)
+    }
     with zipfile.ZipFile(path) as z:
-        for member in ("windows/ccr-claude.ps1", "windows/ccr-claude.cmd"):
+        for member, want_bom in wanted.items():
             name = f"{prefix}/{member}"
             try:
                 raw = z.read(name)
             except KeyError:
                 fail(f"{path.name}: missing {member}")
                 continue
-            if not raw.startswith(b"\xef\xbb\xbf"):
+            has_bom = raw.startswith(b"\xef\xbb\xbf")
+            if want_bom and not has_bom:
                 fail(f"{path.name}: {member} has no UTF-8 BOM")
+            elif not want_bom and has_bom:
+                fail(f"{path.name}: {member} has a UTF-8 BOM (cmd would run it as part of line 1)")
             elif raw.count(b"\r\n") != raw.count(b"\n"):
                 fail(f"{path.name}: {member} has bare LF line endings")
             else:
-                ok(f"{path.name}: {member} is BOM + CRLF")
+                ok(f"{path.name}: {member} is {'BOM + ' if want_bom else ''}CRLF")
 
 
 def verify_tar(path: Path) -> None:
