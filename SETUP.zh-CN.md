@@ -113,32 +113,41 @@ Try running with --force to override checks
 > **跳过「已安装」的检查去强制重装**——也就是更确定地走网络。实测：断网时
 > `install --force` 直接失败，而**不加** `--force` 反而能靠本地缓存成功。
 
-#### 首选：`windows\install-claude.ps1`（脚本，一条命令）
+#### 首选：`windows\install-claude.ps1`（一条命令）
 
 仓库自带一个独立的安装脚本，专门解决这个问题：**下载好 exe 之后，它不需要任何网络
 就能装完**。它做的事和 `install` 一样（放二进制、加 PATH），但会先校验再写。
 
-```powershell
-# 先试运行：只打印计划，且会真的把哈希算一遍比对
-.\windows\install-claude.ps1 -Exe .\claude-2.1.316-win32-x64.exe
+**最简用法**——在下载目录里直接跑，不用传路径：
 
-# 确认后写入
-.\windows\install-claude.ps1 -Exe .\claude-2.1.316-win32-x64.exe -Apply
+```powershell
+cd $env:USERPROFILE\Downloads
+.\install-claude.ps1 -Apply
 ```
 
-版本号从文件名解析，所以文件名必须是发布时的形式
-（`claude-<版本>-win32-x64.exe`）。脚本会拒绝不符合命名、或**不是 Windows 可执行文件**
-的输入——被墙时下载常把 HTML 错误页存成 `.exe`，那种文件一放上去就会白跑一趟。
+脚本会自动找 `claude-<版本>-win32-x64.exe`，依次搜：**当前目录 → 脚本所在目录 →
+`Downloads`**。找到多份时用最新的那个（并列出全部，让你确认没选错）。
+
+不想直接写就先去掉了 `-Apply` 跑一次，它只打印计划、把哈希算一遍，不写任何东西：
+
+```powershell
+.\install-claude.ps1
+```
 
 **完全离线**（连 `sha256sums.txt` 都拉不到）时，把哈希直接传进去：
 
 ```powershell
-.\windows\install-claude.ps1 -Exe .\claude-2.1.316-win32-x64.exe `
-    -ExpectedHash e896a9d8da519353a49bf69ca4a695ba7e09067752687c675b3969041e632d52 -Apply
+.\install-claude.ps1 -Apply `
+    -ExpectedHash e896a9d8da519353a49bf69ca4a695ba7e09067752687c675b3969041e632d52
 ```
 
-默认会去镜像的 `sha256sums.txt` 取期望值做自动比对；`-ExpectedHash` 只是把这一步
-换成手给。`-SkipHashCheck` 可以跳过，但不推荐——哈希是唯一能确认「这个文件就是那个文件」的东西。
+脚本在动手前会拦下两类最容易出事的输入：
+
+- **不是 Windows 可执行文件**（没有 `MZ` 头）——被墙时下载常把 HTML 错误页存成 `.exe`
+- **哈希不符**——文件损坏、被替换、或下错了平台/版本
+
+版本号从文件名解析，所以文件名必须是发布时的形式（`claude-<版本>-win32-x64.exe`）。
+路径也可以显式给：`.\install-claude.ps1 <路径> -Apply`。
 
 其他开关：
 
@@ -147,6 +156,7 @@ Try running with --force to override checks
 | `-Cache` | 额外写入 `~\.local\share\claude\versions\<版本>`，让以后 `install <版本>` 能离线工作 |
 | `-HardLink` | 配合 `-Cache`，用硬链接代替第二份拷贝（须同一分区） |
 | `-SumsUrl` | 换一个 `sha256sums.txt` 地址 |
+| `-SkipHashCheck` | 跳过哈希校验（不推荐） |
 
 脚本是幂等的：已经装好同一份文件时重跑不会重写，PATH 也不会重复添加。
 

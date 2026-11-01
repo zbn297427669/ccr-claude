@@ -50,23 +50,22 @@
   Write the changes. Without it, only a plan is printed.
 
 .EXAMPLE
-  .\install-claude.ps1 -Exe .\claude-2.1.316-win32-x64.exe
-  # prints the plan, downloads sha256sums.txt, checks the hash, writes nothing
+  .\install-claude.ps1
+  # finds claude-*-win32-*.exe in the current directory, the script's own
+  # directory, or Downloads, and checks it against the release's sha256sums.
+  # Writes nothing.
 
 .EXAMPLE
-  .\install-claude.ps1 -Exe .\claude-2.1.316-win32-x64.exe -Apply
+  .\install-claude.ps1 -Apply
+  # the whole offline install, no path needed
 
 .EXAMPLE
-  .\install-claude.ps1 -Exe .\claude-2.1.316-win32-x64.exe `
-      -ExpectedHash e896a9d8da519353a49bf69ca4a695ba7e09067752687c675b3969041e632d52 -Apply
-  # fully offline: no network at any point
-
-.EXAMPLE
-  .\install-claude.ps1 -Exe .\claude-2.1.316-win32-x64.exe -Cache -HardLink -Apply
+  .\install-claude.ps1 -Apply -ExpectedHash e896a9d8da519353a49bf69ca4a695ba7e09067752687c675b3969041e632d52
+  # fully offline: no network at any point, including the hash
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(Position = 0)]
     [string]$Exe,
     [string]$ExpectedHash,
     [string]$SumsUrl,
@@ -85,7 +84,40 @@ function Bad([string]$Msg) { Write-Host "install-claude: $Msg" -ForegroundColor 
 
 if ($HardLink -and -not $Cache) { Bad "-HardLink only makes sense with -Cache." }
 
-# ---------------------------------------------------------------- 文件检查
+# ---------------------------------------------------------------- 找 exe
+# The common case is "I downloaded it, now run this". Requiring the path on top
+# of that is friction for nothing, so look for it first: the current directory,
+# the script's own directory, and Downloads -- newest first, so a re-download
+# wins over an older copy. An explicit -Exe always wins over all of it.
+$ExePattern = '^claude-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-(win32-(?:x64|arm64))\.exe$'
+if (-not $Exe) {
+    $searchDirs = @(
+        (Get-Location).ProviderPath,
+        $PSScriptRoot,
+        (Join-Path $HOME 'Downloads')
+    )
+    $found = @()
+    foreach ($d in $searchDirs) {
+        if (-not $d -or -not (Test-Path -LiteralPath $d -PathType Container)) { continue }
+        $found += Get-ChildItem -LiteralPath $d -Filter 'claude-*-win32-*.exe' -File -ErrorAction SilentlyContinue
+    }
+    # De-duplicate: the same file can match through more than one search dir.
+    $found = $found | Where-Object { $_.Name -match $ExePattern } |
+        Sort-Object -Property @{ Expression = { $_.LastWriteTime }; Descending = $true } -Unique
+    if (-not $found) {
+        Bad ("no claude-<version>-win32-x64.exe found in:`n" +
+             (($searchDirs | ForEach-Object { "           $_" }) -join "`n") +
+             "`n         Download it, or pass the path: .\install-claude.ps1 <path-to-exe> -Apply")
+    }
+    if ($found.Count -gt 1) {
+        Warn "more than one candidate; using the newest (pass an explicit path to choose):"
+        foreach ($f in $found) { Note "  $($f.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))  $($f.FullName)" }
+        Say ''
+    }
+    $Exe = $found[0].FullName
+    Note "using $Exe"
+}
+
 if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) {
     Bad "not found: $Exe"
 }
@@ -94,7 +126,7 @@ $ExeName = [IO.Path]::GetFileName($Exe)
 
 # claude-<version>-<platform>.exe. The platform is part of the name so a
 # darwin or linux build cannot be installed by mistake on Windows.
-$m = [regex]::Match($ExeName, '^claude-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-(win32-(?:x64|arm64))\.exe$')
+$m = [regex]::Match($ExeName, $ExePattern)
 if (-not $m.Success) {
     Bad ("unexpected file name: $ExeName`n" +
          "         expected claude-<version>-win32-x64.exe (or win32-arm64), as published by the release.")
@@ -217,7 +249,7 @@ else {
 Say ''
 
 if (-not $Apply) {
-    Say 'Dry run. Re-run with -Apply to write these changes.'
+    Say 'Dry run. Add -Apply to write these changes.'
     exit 0
 }
 
