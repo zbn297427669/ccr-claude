@@ -6,6 +6,23 @@ describes a set of behaviours, and the two files must agree on them.
 The window figures were measured against **Claude Code 2.1.310**. Effective
 context is `MAX − 20000` (output reserve), and that version has no 800000 cap.
 
+## [Unreleased]
+
+### Added
+
+- **`windows/install-claude.ps1` installs the Claude Code CLI from a local
+  exe, with no network.** `claude install` needs the network twice — to resolve
+  the version, and again at "Checking installation status..." — so on a machine
+  that cannot reach `downloads.claude.ai` it fails even when the exe is already
+  downloaded; `--force` makes it worse by skipping the local-cache check. The
+  script does what `install` does (binary to `~\.local\bin`, PATH entry) but
+  from the file on disk. It reads the version from the release's file name,
+  refuses anything without a PE `MZ` header (a blocked download often saves an
+  HTML error page under the `.exe` name), and verifies SHA256 against the
+  release's `sha256sums.txt`, or `-ExpectedHash` when there is no network at
+  all. Dry run by default; `-Cache` also seeds the version cache so a later
+  `claude install <ver>` works offline.
+
 ## [0.2.1] - 2026-11-01
 
 ### Added
@@ -144,6 +161,7 @@ and the repo had no versioning.
 - A pre-launch probe for `defer_loading` support (`CCR_CAPABILITY_CHECK`).
 
 [0.2.1]: https://github.com/zbn297427669/ccr-claude/compare/d45d646...v0.2.1
+[Unreleased]: https://github.com/zbn297427669/ccr-claude/compare/v0.2.1...HEAD
 [0.2.0]: https://github.com/zbn297427669/ccr-claude/compare/d2474b4...d45d646
 [0.1.0]: https://github.com/zbn297427669/ccr-claude/tree/d2474b4
 

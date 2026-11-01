@@ -41,6 +41,8 @@ Everything else — which profile, which model, which context window — is the 
 ├── windows/
 │   ├── ccr-claude.ps1   real entry point
 │   ├── ccr-claude.cmd   thin shell for double-click / cmd
+│   ├── install.ps1      put the launcher on PATH
+│   ├── install-claude.ps1  install the Claude Code CLI from a local exe, offline
 │   ├── README.md
 │   └── README.zh-CN.md
 └── wsl/

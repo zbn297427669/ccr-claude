@@ -31,6 +31,7 @@ SH = ROOT / "wsl" / "start-claude.sh"
 PS1 = ROOT / "windows" / "ccr-claude.ps1"
 CMD = ROOT / "windows" / "ccr-claude.cmd"
 INSTALL_PS1 = ROOT / "windows" / "install.ps1"
+INSTALL_CLAUDE_PS1 = ROOT / "windows" / "install-claude.ps1"
 PY_TOOLS = (ROOT / "tools" / "release.py",)
 
 VERBOSE = "--verbose" in sys.argv
@@ -183,7 +184,7 @@ def check_ps_syntax() -> None:
     if not exe:
         skip("powershell syntax", "no pwsh / powershell on PATH")
         return
-    targets = [p for p in (PS1, INSTALL_PS1) if p.is_file()]
+    targets = [p for p in (PS1, INSTALL_PS1, INSTALL_CLAUDE_PS1) if p.is_file()]
     if not targets:
         fail("powershell syntax", "no .ps1 files found")
         return
@@ -229,7 +230,7 @@ def check_windows_encoding() -> None:
     checkout applies `.gitattributes`' `eol=crlf` -- so checking here also
     catches an editor that silently rewrote the file as LF.
     """
-    for path, want_bom in ((PS1, True), (INSTALL_PS1, True), (CMD, False)):
+    for path, want_bom in ((PS1, True), (INSTALL_PS1, True), (INSTALL_CLAUDE_PS1, True), (CMD, False)):
         name = f"encoding {path.name}"
         if not path.is_file():
             fail(name, f"{path} is missing")

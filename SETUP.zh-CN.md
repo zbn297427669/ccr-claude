@@ -113,9 +113,46 @@ Try running with --force to override checks
 > **跳过「已安装」的检查去强制重装**——也就是更确定地走网络。实测：断网时
 > `install --force` 直接失败，而**不加** `--force` 反而能靠本地缓存成功。
 
-#### 首选：完全绕开 `install`，手工放置
+#### 首选：`windows\install-claude.ps1`（脚本，一条命令）
 
-`install` 所做的事，本质上就是把二进制放到两个位置。手工做完即可，**不需要任何网络**：
+仓库自带一个独立的安装脚本，专门解决这个问题：**下载好 exe 之后，它不需要任何网络
+就能装完**。它做的事和 `install` 一样（放二进制、加 PATH），但会先校验再写。
+
+```powershell
+# 先试运行：只打印计划，且会真的把哈希算一遍比对
+.\windows\install-claude.ps1 -Exe .\claude-2.1.316-win32-x64.exe
+
+# 确认后写入
+.\windows\install-claude.ps1 -Exe .\claude-2.1.316-win32-x64.exe -Apply
+```
+
+版本号从文件名解析，所以文件名必须是发布时的形式
+（`claude-<版本>-win32-x64.exe`）。脚本会拒绝不符合命名、或**不是 Windows 可执行文件**
+的输入——被墙时下载常把 HTML 错误页存成 `.exe`，那种文件一放上去就会白跑一趟。
+
+**完全离线**（连 `sha256sums.txt` 都拉不到）时，把哈希直接传进去：
+
+```powershell
+.\windows\install-claude.ps1 -Exe .\claude-2.1.316-win32-x64.exe `
+    -ExpectedHash e896a9d8da519353a49bf69ca4a695ba7e09067752687c675b3969041e632d52 -Apply
+```
+
+默认会去镜像的 `sha256sums.txt` 取期望值做自动比对；`-ExpectedHash` 只是把这一步
+换成手给。`-SkipHashCheck` 可以跳过，但不推荐——哈希是唯一能确认「这个文件就是那个文件」的东西。
+
+其他开关：
+
+| 开关 | 作用 |
+| --- | --- |
+| `-Cache` | 额外写入 `~\.local\share\claude\versions\<版本>`，让以后 `install <版本>` 能离线工作 |
+| `-HardLink` | 配合 `-Cache`，用硬链接代替第二份拷贝（须同一分区） |
+| `-SumsUrl` | 换一个 `sha256sums.txt` 地址 |
+
+脚本是幂等的：已经装好同一份文件时重跑不会重写，PATH 也不会重复添加。
+
+#### 手工等价操作
+
+不想跑脚本就手做，效果一样：
 
 ```powershell
 # 1. 校验（见同页 sha256sums.txt；2026-11-01 的 2.1.316 win32-x64 应为：）
@@ -139,16 +176,6 @@ claude --version
 **实测结论**：在代理指向不可路由地址（外网完全不通）的条件下，只放 `\.local\bin\claude.exe`
 一个文件即可正常启动：`--version` 0.4 秒返回 `2.1.316 (Claude Code)`，`claude -p` 3.3 秒
 正常响应。**唯一代价是程序无法自我更新**，对配合 CCR 使用的场景没有影响。
-
-想让 `install` 的元数据也齐全（可选），再补一份缓存：
-
-```powershell
-# 省空间用硬链接（两个位置必须同一分区）；想稳妥就再 Copy-Item 一份
-$cache = "$env:USERPROFILE\.local\share\claude\versions"
-New-Item -ItemType Directory -Force $cache | Out-Null
-New-Item -ItemType HardLink -Path "$cache\2.1.316" `
-         -Target "$env:USERPROFILE\.local\bin\claude.exe"
-```
 
 #### 次选：让 `install` 走本地缓存
 

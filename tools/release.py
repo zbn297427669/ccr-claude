@@ -90,7 +90,8 @@ def check_changelog_links(version: str) -> None:
     for h in headings:
         if h not in links:
             fail(f"heading [{h}] has no link definition at the bottom")
-    if "[Unreleased]" not in headings and "Unreleased" in links:
+    # headings are captured without their brackets, so compare the bare word.
+    if "Unreleased" not in headings and "Unreleased" in links:
         fail("[Unreleased] link is still defined but no such heading exists")
     # A released version must compare against the previous tag, not HEAD.
     for h in headings:
