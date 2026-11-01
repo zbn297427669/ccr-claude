@@ -74,6 +74,18 @@ directory. Pass the repo root explicitly, e.g. -RepoPath 'C:\tools\ccr-claude'.
 它会拒绝 UNC 路径（`\\wsl.localhost\...`）：RemoteSigned 策略下 `.ps1` 在那儿
 根本跑不起来，装上去只会得到一个启动就失败的安装。
 
+### 下载的是发布包 zip，不是 clone
+
+浏览器下载再解压出来的文件带 Mark of the Web，RemoteSigned 下 `.ps1` 会直接报
+`SecurityError: UnauthorizedAccess` —— 而且是在本地盘上，UNC 那道检查管不着。
+装之前先清掉：
+
+```powershell
+Get-ChildItem -Recurse -Include *.ps1, *.cmd | Unblock-File
+```
+
+`git clone` 不需要这一步：文件由 git 自己写，不带这个标记。
+
 仓库必须放在**本地盘**上。手动装也一样，下面这段等价于脚本：
 
 ```powershell

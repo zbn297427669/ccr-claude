@@ -77,6 +77,19 @@ It refuses a UNC path (`\\wsl.localhost\...`): `RemoteSigned` will not run a
 `.ps1` from one, so installing from there produces a launcher that fails at
 startup. The repo has to live on a local drive.
 
+### If you downloaded the release zip instead of cloning
+
+Files extracted from a browser download carry a Mark of the Web, and under
+`RemoteSigned` the `.ps1` then refuses to run with `SecurityError: UnauthorizedAccess`
+— on a local drive, which is where the UNC check has nothing to say. Clear it
+before installing:
+
+```powershell
+Get-ChildItem -Recurse -Include *.ps1, *.cmd | Unblock-File
+```
+
+`git clone` does not need this: git writes the files itself, without the stream.
+
 Doing it by hand is the same thing:
 
 ```powershell
