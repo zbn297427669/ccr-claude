@@ -569,7 +569,7 @@ resolve_context_windows() {
   fi
 
   python3 - "$CCR_DIR" "$@" <<'PY' 2>/dev/null || true
-import json, re, shutil, sqlite3, sys, tempfile, urllib.request
+import json, os, re, shutil, sqlite3, sys, tempfile, urllib.request
 from pathlib import Path
 
 ccr = Path(sys.argv[1])
@@ -618,10 +618,11 @@ def window_of(entry):
     llama.cpp-family shape (many local servers answer
     {"id": ..., "meta": {"n_ctx": 32768}}), and some ring builds use it
     too -- their own launchers read all three, which is why leaving it out
-    here made every such engine resolve to nothing.
+    here made every such engine resolve to nothing. `context_length` is what
+    halogen (and some peers) put next to `max_model_len`.
     """
     for f in ("context_window", "contextWindow", "max_context_window",
-              "max_model_len"):
+              "max_model_len", "context_length"):
         v = to_int(entry.get(f))
         if v:
             return v
@@ -632,6 +633,39 @@ def window_of(entry):
     if isinstance(meta, dict):
         return to_int(meta.get("n_ctx")) or to_int(meta.get("context_length"))
     return None
+
+
+def can_probe_provider(base):
+    """Loopback, RFC1918, or Tailscale CGNAT — not public cloud vendors.
+
+    FAEX1 over Tailscale (100.x) is the usual local-engine shape; restricting
+    probes to 127.0.0.1 left those as `unknown`. Set CCR_PROBE_REMOTE=1 to
+    allow any host (not the default: a hung public /v1/models stalls the menu).
+    """
+    if (os.environ.get("CCR_PROBE_REMOTE") or "").strip().lower() in (
+            "1", "true", "yes"):
+        return bool(base)
+    m = re.match(r"^https?://([^/?#]+)", base or "", re.I)
+    if not m:
+        return False
+    host = m.group(1).split("@")[-1]
+    if host.startswith("["):
+        return host[1:].split("]", 1)[0] == "::1"
+    host = host.split(":", 1)[0].lower()
+    if host in ("localhost",) or host.startswith("127."):
+        return True
+    parts = host.split(".")
+    if len(parts) == 4 and all(p.isdigit() for p in parts):
+        a, b = int(parts[0]), int(parts[1])
+        if a == 10:
+            return True
+        if a == 192 and b == 168:
+            return True
+        if a == 172 and 16 <= b <= 31:
+            return True
+        if a == 100 and 64 <= b <= 127:
+            return True
+    return False
 
 
 # ---- provider metadata, read once for the whole list -----------------------
@@ -706,13 +740,15 @@ def probed_windows(base, key):
     """
     if base not in probed:
         found = {}
+        # Direct to the engine — do not inherit HTTP_PROXY (Clash etc.).
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         for suffix in ("/models", "/v1/models"):
             try:
                 req = urllib.request.Request(base + suffix)
                 if key:
                     req.add_header("authorization", "Bearer " + key)
                     req.add_header("x-api-key", key)
-                with urllib.request.urlopen(req, timeout=1.5) as r:
+                with opener.open(req, timeout=1.5) as r:
                     data = json.loads(r.read().decode("utf-8", "replace"))
             except Exception as exc:
                 # A timeout means something is listening but not answering --
@@ -755,9 +791,9 @@ def resolve(name):
         if v:
             return v
 
-    # 1. the endpoint itself, when it is on this machine
+    # 1. the endpoint itself (loopback / private LAN / Tailscale)
     base = p.get("base") or ""
-    if re.match(r"^https?://(127\.|localhost|\[::1\])", base):
+    if can_probe_provider(base):
         found = probed_windows(base, p.get("key") or "")
         for k in wanted:
             if k in found:

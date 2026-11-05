@@ -6,6 +6,19 @@ describes a set of behaviours, and the two files must agree on them.
 The window figures were measured against **Claude Code 2.1.310**. Effective
 context is `MAX − 20000` (output reserve), and that version has no 800000 cap.
 
+## Unreleased
+
+### Fixed
+
+- **Tailscale / LAN halogen no longer shows `unknown` context.** The launcher
+  only probed `/v1/models` on loopback (`127.0.0.1` / `localhost`). A FAEX1
+  (or any engine) reached as `http://100.x:8731` was skipped even though
+  halogen already advertises `max_model_len` / `meta.n_ctx` = 262144. Probes
+  now also cover RFC1918 and Tailscale CGNAT (`100.64/10`), still skip public
+  cloud hosts, bypass `HTTP_PROXY` for the probe, and also read flat
+  `context_length`. Override with `CCR_PROBE_REMOTE=1` if you truly need to
+  probe a non-private base URL.
+
 ## [0.3.0] - 2026-11-01
 
 ### Added

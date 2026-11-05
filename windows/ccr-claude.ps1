@@ -315,6 +315,7 @@ try:
         #
         # 一次问一串，因为菜单有十几个模型：逐个调用会把同一个库、同一份目录
         # 读十几遍，还会对同一个回环端点反复探测（本地引擎每次都要付冷启动）。
+        import os
         import urllib.request
 
         raws = [a.strip() for a in sys.argv[3:] if (a or "").strip()]
@@ -334,8 +335,9 @@ try:
             # meta.n_ctx 是 llama.cpp 系的形状（不少本地服务器返回
             # {"id":…,"meta":{"n_ctx":32768}}），另一些只在 ring 构建里这么答 ——
             # 它们自己的启动器三种都读，这里漏了它，那些引擎就解析不到窗口。
+            # context_length 是 halogen 等引擎的平铺字段（与 max_model_len 同值）。
             for f in ("context_window", "contextWindow",
-                      "max_context_window", "max_model_len"):
+                      "max_context_window", "max_model_len", "context_length"):
                 v = to_int(entry.get(f))
                 if v:
                     return v
@@ -346,6 +348,36 @@ try:
             if isinstance(meta, dict):
                 return to_int(meta.get("n_ctx")) or to_int(meta.get("context_length"))
             return None
+
+        def can_probe_provider(base):
+            # 只探测本机/受信局域网。公网供应商仍跳过（防菜单被超时拖慢；
+            # 它们的窗口应落在 CCR modelMetadata / catalog）。
+            # Tailscale CGNAT（100.64/10）与 RFC1918 算受信——FAEX1 经
+            # Tailscale 挂 halogen 是常见形态；仅认回环会得到 unknown。
+            if (os.environ.get("CCR_PROBE_REMOTE") or "").strip().lower() in (
+                    "1", "true", "yes"):
+                return bool(base)
+            m = re.match(r"^https?://([^/?#]+)", base or "", re.I)
+            if not m:
+                return False
+            host = m.group(1).split("@")[-1]
+            if host.startswith("["):
+                return host[1:].split("]", 1)[0] == "::1"
+            host = host.split(":", 1)[0].lower()
+            if host in ("localhost",) or host.startswith("127."):
+                return True
+            parts = host.split(".")
+            if len(parts) == 4 and all(p.isdigit() for p in parts):
+                a, b = int(parts[0]), int(parts[1])
+                if a == 10:
+                    return True
+                if a == 192 and b == 168:
+                    return True
+                if a == 172 and 16 <= b <= 31:
+                    return True
+                if a == 100 and 64 <= b <= 127:  # Tailscale
+                    return True
+            return False
 
         # CCR 对没有元数据的模型一律写 128000（bundle 里 KFe=128e3）。那是它的
         # 默认值，不是探测结果，和"CCR 不知道"分不开，所以不能当读数。
@@ -383,13 +415,15 @@ try:
             if base in probed:
                 return probed[base]
             found = {}
+            # 直连引擎，不走系统 HTTP 代理（Clash 等会把 Tailscale 地址带偏）。
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             for suffix in ("/models", "/v1/models"):
                 try:
                     req = urllib.request.Request(base + suffix)
                     if key:
                         req.add_header("authorization", "Bearer " + key)
                         req.add_header("x-api-key", key)
-                    with urllib.request.urlopen(req, timeout=1.5) as r:
+                    with opener.open(req, timeout=1.5) as r:
                         data = json.loads(r.read().decode("utf-8", "replace"))
                 except Exception as exc:
                     # 超时说明端口有人听但不应答（引擎冷启动或加载中），同一个
@@ -432,9 +466,9 @@ try:
                 if v:
                     return v
 
-            # 2. 端点自己，仅回环
+            # 2. 端点自己：回环 / 私网 / Tailscale（见 can_probe_provider）
             base = p.get("base") or ""
-            if re.match(r"^https?://(127\.|localhost|\[::1\])", base):
+            if can_probe_provider(base):
                 found = probed_windows(base, p.get("key") or "")
                 for k in (part, name):
                     if k in found:
